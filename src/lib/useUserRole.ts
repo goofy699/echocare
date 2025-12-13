@@ -1,8 +1,7 @@
-// src/lib/useUserRole.ts
 import { useEffect, useState } from "react";
-import { onAuthStateChanged } from "firebase/auth";
+import { auth } from "@/firebase";
 import { doc, getDoc } from "firebase/firestore";
-import { auth, db } from "@/firebase";
+import { db } from "@/firebase";
 
 export type UserRole = "patient" | "doctor" | "caregiver" | "admin";
 
@@ -11,25 +10,18 @@ export function useUserRole() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const unsub = onAuthStateChanged(auth, async (user) => {
-            try {
-                setLoading(true);
+        const user = auth.currentUser;
+        if (!user) {
+            setLoading(false);
+            return;
+        }
 
-                if (!user) {
-                    setRole(null);
-                    return;
-                }
-
-                const snap = await getDoc(doc(db, "users", user.uid));
-                const data = snap.data();
-
-                setRole((data?.role as UserRole) || null);
-            } finally {
-                setLoading(false);
+        getDoc(doc(db, "users", user.uid)).then((snap) => {
+            if (snap.exists()) {
+                setRole(snap.data().role);
             }
+            setLoading(false);
         });
-
-        return () => unsub();
     }, []);
 
     return { role, loading };
