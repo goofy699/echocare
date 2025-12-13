@@ -12,20 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Logo } from "@/components/Logo";
-import {
-  User,
-  Stethoscope,
-  Users,
-  Shield,
-  Lock,
-  Mail,
-  Info,
-} from "lucide-react";
+import { User, Stethoscope, Users, Shield, Lock, Mail, Info } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
-import { auth } from "@/firebase";
+import { auth, db } from "@/firebase";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+
 import { sendOtpEmail } from "@/lib/email";
 
 type UserRole = "patient" | "doctor" | "caregiver" | "admin";
@@ -51,7 +45,6 @@ export default function Auth() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Where user tried to go (sent by ProtectedRoute)
   const from = (location.state as any)?.from as string | undefined;
 
   const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
@@ -91,15 +84,20 @@ export default function Auth() {
     },
   ];
 
-  // ✅ THIS IS THE KEY FIX:
-  // If user is already logged in and clicks their role -> go directly to dashboard (no credentials).
-  // Otherwise show sign in/up form for that role.
-  const handleRoleSelect = (role: UserRole) => {
-    const currentRole = auth.currentUser?.displayName as UserRole | undefined;
+  // ✅ If already logged in, check role from Firestore and route correctly
+  const handleRoleSelect = async (role: UserRole) => {
+    if (auth.currentUser) {
+      try {
+        const snap = await getDoc(doc(db, "users", auth.currentUser.uid));
+        const storedRole = (snap.data()?.role as UserRole) || null;
 
-    if (auth.currentUser && currentRole === role) {
-      navigate(ROLE_ROUTES[role], { replace: true });
-      return;
+        if (storedRole && storedRole === role) {
+          navigate(ROLE_ROUTES[role], { replace: true });
+          return;
+        }
+      } catch {
+        // ignore and show login form
+      }
     }
 
     setSelectedRole(role);
@@ -123,7 +121,7 @@ export default function Auth() {
 
     try {
       if (type === "signup") {
-        // -------- SIGN UP: SEND OTP ONLY --------
+        // ✅ SIGN UP = send OTP (client side) + store pending in localStorage temporarily
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const expiresAt = Date.now() + 10 * 60 * 1000;
 
@@ -150,32 +148,32 @@ export default function Auth() {
           return;
         }
       } else {
-        // -------- SIGN IN (Firebase) --------
+        // ✅ SIGN IN (Firebase Auth)
         const cred = await signInWithEmailAndPassword(auth, email, password);
 
-        const storedRole = cred.user.displayName as UserRole | null;
+        // ✅ READ ROLE FROM FIRESTORE (source of truth)
+        const snap = await getDoc(doc(db, "users", cred.user.uid));
+        const storedRole = (snap.data()?.role as UserRole) || null;
 
         if (!storedRole) {
           toast.error(
-            "No role is set for this account. Please contact the administrator."
+            "No role found for this account in Firestore. Please contact admin or sign up again."
           );
           await signOut(auth);
           return;
         }
 
+        // ✅ If user chose wrong role, show EXACT role
         if (storedRole !== selectedRole) {
           toast.error(
-            `This account is registered as "${storedRole}". Please select the correct role to continue.`
+            `Wrong role selected. This email is registered as "${storedRole}". Please choose "${storedRole}" to continue.`
           );
           await signOut(auth);
           return;
         }
 
         toast.success("Signed in successfully!");
-        const route = ROLE_ROUTES[selectedRole];
-
-        // ✅ If user came from a protected route, go back there; else dashboard route
-        navigate(from || route, { replace: true });
+        navigate(from || ROLE_ROUTES[selectedRole], { replace: true });
       }
     } catch (err: any) {
       console.error("❌ Auth error:", err);
@@ -201,7 +199,6 @@ export default function Auth() {
 
   return (
     <div className="min-h-screen bg-gradient-hero flex items-center justify-center p-4 relative">
-      {/* Back to Home */}
       <div className="absolute top-4 left-4 sm:top-6 sm:left-6">
         <Button
           onClick={() => navigate("/", { replace: true })}
@@ -312,7 +309,6 @@ export default function Auth() {
                   <TabsTrigger value="signup">Sign Up</TabsTrigger>
                 </TabsList>
 
-                {/* SIGN IN */}
                 <TabsContent value="signin" className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="email-signin">Email Address</Label>
@@ -371,7 +367,6 @@ export default function Auth() {
                   </Button>
                 </TabsContent>
 
-                {/* SIGN UP */}
                 <TabsContent value="signup" className="space-y-4">
                   <div className="space-y-2">
                     <Label htmlFor="email-signup">Email Address</Label>

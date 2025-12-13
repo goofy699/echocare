@@ -2,23 +2,20 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import {
-    Card,
-    CardContent,
-    CardHeader,
-    CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Logo } from "@/components/Logo";
 
-import { auth } from "@/firebase";
+import { auth, db } from "@/firebase";
 import {
     createUserWithEmailAndPassword,
     updateProfile,
     signInWithEmailAndPassword,
 } from "firebase/auth";
+
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 
 import { PENDING_SIGNUP_KEY } from "./Auth";
 
@@ -81,16 +78,21 @@ export default function VerifyOtp() {
         try {
             setIsSubmitting(true);
 
-            // 1) Create user in Firebase
+            // 1) Create user
             const cred = await createUserWithEmailAndPassword(
                 auth,
                 pending.email,
                 pending.password
             );
 
-            // 2) Save role on user
-            await updateProfile(cred.user, {
-                displayName: pending.role,
+            // 2) ✅ Save role (also keep displayName for compatibility)
+            await updateProfile(cred.user, { displayName: pending.role });
+
+            // ✅ STORE ROLE IN FIRESTORE (REAL SOURCE OF TRUTH)
+            await setDoc(doc(db, "users", cred.user.uid), {
+                email: pending.email,
+                role: pending.role,
+                createdAt: serverTimestamp(),
             });
 
             // 3) Sign in user
@@ -98,11 +100,10 @@ export default function VerifyOtp() {
 
             toast.success("Account created and verified!");
 
-            // 4) Clean up & redirect
+            // 4) cleanup + redirect
             localStorage.removeItem(PENDING_SIGNUP_KEY);
 
-            const route = ROLE_ROUTES[pending.role];
-            navigate(route);
+            navigate(ROLE_ROUTES[pending.role], { replace: true });
         } catch (err) {
             console.error("OTP verify/signup error:", err);
             toast.error("Could not complete signup. Please try again.");
@@ -126,6 +127,7 @@ export default function VerifyOtp() {
                             below to complete your registration.
                         </p>
                     </CardHeader>
+
                     <CardContent className="space-y-4">
                         <div className="space-y-2">
                             <Label htmlFor="otp">Verification Code</Label>
@@ -135,9 +137,7 @@ export default function VerifyOtp() {
                                 maxLength={6}
                                 placeholder="123456"
                                 value={otpInput}
-                                onChange={(e) =>
-                                    setOtpInput(e.target.value.replace(/\D/g, ""))
-                                }
+                                onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, ""))}
                                 className="tracking-[0.4em] text-center text-lg"
                             />
                         </div>
@@ -151,8 +151,8 @@ export default function VerifyOtp() {
                         </Button>
 
                         <p className="text-[11px] text-muted-foreground text-center mt-2">
-                            This code expires in 10 minutes. If it expires, go back and sign
-                            up again to receive a new code.
+                            This code expires in 10 minutes. If it expires, go back and sign up
+                            again to receive a new code.
                         </p>
 
                         <Button
