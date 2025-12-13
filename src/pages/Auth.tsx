@@ -148,7 +148,7 @@ export default function Auth() {
           return;
         }
       } else {
-        // ✅ SIGN IN (Firebase Auth)
+
         const cred = await signInWithEmailAndPassword(auth, email, password);
 
         // ✅ READ ROLE FROM FIRESTORE (source of truth)
