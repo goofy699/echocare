@@ -1,4 +1,4 @@
-// src/components/RoleRoute.tsx
+
 import { Navigate, Outlet } from "react-router-dom";
 import { useUserRole, UserRole } from "@/lib/useUserRole";
 
