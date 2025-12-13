@@ -21,12 +21,11 @@ import {
   Mail,
   Info,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
 import { auth } from "@/firebase";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
-
 import { sendOtpEmail } from "@/lib/email";
 
 type UserRole = "patient" | "doctor" | "caregiver" | "admin";
@@ -50,6 +49,11 @@ export const PENDING_SIGNUP_KEY = "echocare_pending_signup";
 
 export default function Auth() {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Where user tried to go (sent by ProtectedRoute)
+  const from = (location.state as any)?.from as string | undefined;
+
   const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
   const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
@@ -87,6 +91,23 @@ export default function Auth() {
     },
   ];
 
+  // ✅ THIS IS THE KEY FIX:
+  // If user is already logged in and clicks their role -> go directly to dashboard (no credentials).
+  // Otherwise show sign in/up form for that role.
+  const handleRoleSelect = (role: UserRole) => {
+    const currentRole = auth.currentUser?.displayName as UserRole | undefined;
+
+    if (auth.currentUser && currentRole === role) {
+      navigate(ROLE_ROUTES[role], { replace: true });
+      return;
+    }
+
+    setSelectedRole(role);
+    setEmail("");
+    setPassword("");
+    setTab("signin");
+  };
+
   const handleAuth = async (type: "signin" | "signup") => {
     if (!selectedRole) {
       toast.error("Please select a role to continue");
@@ -99,19 +120,15 @@ export default function Auth() {
     }
 
     setIsLoading(true);
-    console.log("▶ handleAuth start:", type);
 
     try {
       if (type === "signup") {
         // -------- SIGN UP: SEND OTP ONLY --------
-        const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit
-        const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-
-        console.log("Generated OTP:", otp);
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiresAt = Date.now() + 10 * 60 * 1000;
 
         try {
-          await sendOtpEmail(email, otp); // email template uses {{otp}}
-          console.log("✅ OTP email sent");
+          await sendOtpEmail(email, otp);
 
           const pending: PendingSignup = {
             email,
@@ -122,11 +139,8 @@ export default function Auth() {
           };
 
           localStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify(pending));
-
           toast.success("Verification code sent! Please check your email.");
-
-          // Go to OTP verify page
-          navigate("/verify-otp");
+          navigate("/verify-otp", { replace: true });
           return;
         } catch (emailErr) {
           console.error("❌ Failed to send OTP email:", emailErr);
@@ -138,7 +152,6 @@ export default function Auth() {
       } else {
         // -------- SIGN IN (Firebase) --------
         const cred = await signInWithEmailAndPassword(auth, email, password);
-        console.log("✅ Signed in:", cred.user.uid);
 
         const storedRole = cred.user.displayName as UserRole | null;
 
@@ -160,7 +173,9 @@ export default function Auth() {
 
         toast.success("Signed in successfully!");
         const route = ROLE_ROUTES[selectedRole];
-        navigate(route);
+
+        // ✅ If user came from a protected route, go back there; else dashboard route
+        navigate(from || route, { replace: true });
       }
     } catch (err: any) {
       console.error("❌ Auth error:", err);
@@ -181,35 +196,33 @@ export default function Auth() {
       toast.error(message);
     } finally {
       setIsLoading(false);
-      console.log("⏹ handleAuth finished");
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-hero flex items-center justify-center p-4 relative">
-      {/* Responsive Back to Home button */}
+      {/* Back to Home */}
       <div className="absolute top-4 left-4 sm:top-6 sm:left-6">
         <Button
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/", { replace: true })}
           size="sm"
           className="
-      rounded-full
-      bg-white/80
-      text-primary
-      border
-      border-primary/30
-      hover:bg-white
-      hover:border-primary
-      shadow-sm
-      transition-all
-      px-3 py-1.5
-      text-xs sm:text-sm
-    "
+            rounded-full
+            bg-white/80
+            text-primary
+            border
+            border-primary/30
+            hover:bg-white
+            hover:border-primary
+            shadow-sm
+            transition-all
+            px-3 py-1.5
+            text-xs sm:text-sm
+          "
         >
           ← Back to Home
         </Button>
       </div>
-
 
       <div className="w-full max-w-6xl">
         <div className="text-center mb-8 mt-8 sm:mt-0">
@@ -234,12 +247,7 @@ export default function Auth() {
                 <Card
                   key={role.id}
                   className="cursor-pointer hover:shadow-medium transition-all hover:scale-[1.02] sm:hover:scale-105 border-2 hover:border-primary"
-                  onClick={() => {
-                    setSelectedRole(role.id);
-                    setEmail("");
-                    setPassword("");
-                    setTab("signin");
-                  }}
+                  onClick={() => handleRoleSelect(role.id)}
                 >
                   <CardHeader className="text-center">
                     <div
@@ -292,6 +300,7 @@ export default function Auth() {
                 {roles.find((r) => r.id === selectedRole)?.title}
               </CardTitle>
             </CardHeader>
+
             <CardContent>
               <Tabs
                 value={tab}
