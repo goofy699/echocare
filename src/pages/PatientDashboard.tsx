@@ -12,6 +12,7 @@ import {
   ThumbsUp,
   Pill,
   Menu,
+  MessagesSquare,
 } from "lucide-react";
 import {
   Sheet,
@@ -35,6 +36,17 @@ export default function PatientDashboard() {
         <Home className="w-4 h-4" />
         Home
       </Button>
+
+      {/* ✅ NEW MESSAGES BUTTON */}
+      <Button
+        variant="ghost"
+        className="w-full justify-start gap-3"
+        onClick={() => navigate("/patient/messages")}
+      >
+        <MessagesSquare className="w-4 h-4" />
+        Messages
+      </Button>
+
       <Button
         variant="ghost"
         className="w-full justify-start gap-3"
@@ -43,6 +55,7 @@ export default function PatientDashboard() {
         <MessageSquare className="w-4 h-4" />
         Chatbot
       </Button>
+
       <Button
         variant="ghost"
         className="w-full justify-start gap-3"
@@ -51,6 +64,7 @@ export default function PatientDashboard() {
         <Calendar className="w-4 h-4" />
         Appointments
       </Button>
+
       <Button
         variant="ghost"
         className="w-full justify-start gap-3"
@@ -59,6 +73,7 @@ export default function PatientDashboard() {
         <Bell className="w-4 h-4" />
         Reminders
       </Button>
+
       <Button
         variant="ghost"
         className="w-full justify-start gap-3"
@@ -67,6 +82,7 @@ export default function PatientDashboard() {
         <FileText className="w-4 h-4" />
         Reports
       </Button>
+
       <Button
         variant="ghost"
         className="w-full justify-start gap-3 text-destructive"
@@ -74,6 +90,7 @@ export default function PatientDashboard() {
         <LifeBuoy className="w-4 h-4" />
         SOS
       </Button>
+
       <Button variant="ghost" className="w-full justify-start gap-3">
         <ThumbsUp className="w-4 h-4" />
         Feedback
@@ -119,10 +136,8 @@ export default function PatientDashboard() {
         {/* PAGE CONTENT */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
           <div className="max-w-7xl mx-auto">
-            {/* ✅ Only show home dashboard if current path is exactly /patient */}
             {location.pathname === "/patient" ? (
               <>
-                {/* HEADER */}
                 <div className="mb-8">
                   <h1 className="text-2xl sm:text-3xl font-bold mb-2">
                     Welcome Back, Jane!
@@ -147,7 +162,6 @@ export default function PatientDashboard() {
                   </div>
                 </div>
 
-                {/* MEDICATION STATUS */}
                 <div className="grid grid-cols-1 gap-6 mb-8">
                   <Card>
                     <CardHeader className="pb-3">
@@ -167,9 +181,7 @@ export default function PatientDashboard() {
                   </Card>
                 </div>
 
-                {/* MAIN GRID */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  {/* WEEKLY HEALTH TRENDS */}
                   <Card>
                     <CardHeader>
                       <CardTitle>Weekly Health Trends</CardTitle>
@@ -186,7 +198,6 @@ export default function PatientDashboard() {
                     </CardContent>
                   </Card>
 
-                  {/* UPCOMING APPOINTMENTS */}
                   <Card>
                     <CardHeader>
                       <CardTitle>Upcoming Appointments</CardTitle>
@@ -207,7 +218,6 @@ export default function PatientDashboard() {
                     </CardContent>
                   </Card>
 
-                  {/* MEDICATION ADHERENCE */}
                   <Card>
                     <CardHeader>
                       <CardTitle>Medication Adherence</CardTitle>
@@ -226,14 +236,12 @@ export default function PatientDashboard() {
                 </div>
               </>
             ) : (
-              // ✅ Show nested route content like /appointments, /chatbot, etc.
               <Outlet />
             )}
           </div>
         </main>
       </div>
 
-      {/* FLOATING ACTION BUTTONS */}
       <div className="fixed bottom-6 right-6 flex flex-col gap-3">
         <Button className="w-12 h-12 rounded-full shadow-lg bg-accent">
           <MessageSquare className="w-6 h-6" />
