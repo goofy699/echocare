@@ -29,17 +29,25 @@ function assertRole(role: any): asserts role is Role {
 const MAIL_USER = process.env.MAIL_USER;
 const MAIL_PASS = process.env.MAIL_PASS;
 
+// In emulator/dev mode, allow missing mail credentials and use a no-op transporter
+let transporter: any;
 if (!MAIL_USER || !MAIL_PASS) {
-    throw new Error("MAIL_USER or MAIL_PASS not set in environment variables");
+    console.warn("MAIL_USER or MAIL_PASS not set; using no-op transporter for local development.");
+    transporter = {
+        sendMail: async (opts: any) => {
+            console.log("[dev-noop] sendMail called with:", opts);
+            return { accepted: [opts.to] };
+        },
+    };
+} else {
+    transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+            user: MAIL_USER,
+            pass: MAIL_PASS,
+        },
+    });
 }
-
-const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-        user: MAIL_USER,
-        pass: MAIL_PASS,
-    },
-});
 
 /* =========================
    1) SEND OTP
@@ -172,4 +180,152 @@ export const verifyOtpAndCreateUser = onCall(async (request) => {
         uid: user.uid,
         role: data.role,
     };
+});
+
+/* =========================
+   Admin helpers to list users
+   (onCall functions — keep access controlled)
+========================= */
+
+export const listDoctors = onCall(async (request) => {
+    const auth = request.auth;
+    if (!auth) throw new HttpsError("unauthenticated", "Not signed in.");
+
+    // return users with role === 'doctor', fall back to all users if none tagged
+    const snap = await db.collection("users").where("role", "==", "doctor").get();
+    let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+    if (docs.length === 0) {
+        const all = await db.collection("users").get();
+        docs = all.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+    }
+
+    return docs.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null }));
+});
+
+export const listPatientsForDoctor = onCall(async (request) => {
+    const auth = request.auth;
+    if (!auth) throw new HttpsError("unauthenticated", "Not signed in.");
+
+    const callerId = auth.uid;
+
+    // Ensure caller is allowed: must be doctor or admin
+    const callerDoc = await db.collection("users").doc(callerId).get();
+    const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+    if (callerRole !== "doctor" && callerRole !== "admin") {
+        throw new HttpsError("permission-denied", "Not authorized to list patients.");
+    }
+
+    let doctorId = String(request.data?.doctorId || "");
+    if (!doctorId) {
+        // default to caller if doctor
+        if (callerRole === "doctor") doctorId = callerId;
+        else throw new HttpsError("invalid-argument", "doctorId is required for non-doctor callers.");
+    }
+
+    // Query all users and prefer role == patient (or untagged users)
+    const allSnap = await db.collection("users").get();
+    const all = allSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+    const isPatientCandidate = (u: any) => (u.role ? u.role === "patient" : true);
+
+    const assigned = all.filter((p: any) => {
+        if (!isPatientCandidate(p)) return false;
+        if (p.assignedDoctorId) return p.assignedDoctorId === doctorId;
+        if (p.doctorId) return p.doctorId === doctorId;
+        if (Array.isArray(p.assignedDoctors)) return p.assignedDoctors.includes(doctorId);
+        return false;
+    });
+
+    const result = assigned.length > 0 ? assigned : all.filter(isPatientCandidate);
+
+    return result.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: d.role || null }));
+});
+
+// HTTP endpoints with CORS for cross-origin browser fetches
+import { onRequest } from "firebase-functions/v2/https";
+
+function setCors(res: any, reqOrigin?: string) {
+    // In dev allow localhost, in prod you may restrict
+    const origin = reqOrigin || "*";
+    res.set("Access-Control-Allow-Origin", origin);
+    res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    // Allow credentials in case client sends Authorization header with credentials
+    res.set("Access-Control-Allow-Credentials", "true");
+    // Ensure proxies vary by origin so caches treat origins separately
+    res.set("Vary", "Origin");
+}
+
+export const listDoctorsHttp = onRequest(async (req, res) => {
+    console.log("listDoctorsHttp", req.method, "origin=", req.headers.origin);
+    setCors(res, req.headers.origin as string | undefined);
+    if (req.method === "OPTIONS") {
+        res.status(204).send("");
+        return;
+    }
+
+    try {
+        const snap = await db.collection("users").where("role", "==", "doctor").get();
+        let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        if (docs.length === 0) {
+            const all = await db.collection("users").get();
+            docs = all.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        }
+        const result = docs.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null }));
+        res.json(result);
+        return;
+    } catch (err) {
+        console.error("listDoctorsHttp error:", err);
+        res.status(500).json({ error: "internal" });
+        return;
+    }
+});
+
+export const listPatientsForDoctorHttp = onRequest(async (req, res) => {
+    console.log("listPatientsForDoctorHttp", req.method, "origin=", req.headers.origin);
+    setCors(res, req.headers.origin as string | undefined);
+    if (req.method === "OPTIONS") {
+        res.status(204).send("");
+        return;
+    }
+
+    try {
+        const authHeader = (req.headers.authorization || "").split("Bearer ")[1];
+        if (!authHeader) {
+            res.status(401).json({ error: "unauthenticated" });
+            return;
+        }
+        const decoded = await admin.auth().verifyIdToken(authHeader);
+        const callerId = decoded.uid;
+        const callerDoc = await db.collection("users").doc(callerId).get();
+        const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+        if (callerRole !== "doctor" && callerRole !== "admin") {
+            res.status(403).json({ error: "permission-denied" });
+            return;
+        }
+
+        const doctorId = String(req.body?.doctorId || callerId);
+
+        const allSnap = await db.collection("users").get();
+        const all = allSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+        const isPatientCandidate = (u: any) => (u.role ? u.role === "patient" : true);
+
+        const assigned = all.filter((p: any) => {
+            if (!isPatientCandidate(p)) return false;
+            if (p.assignedDoctorId) return p.assignedDoctorId === doctorId;
+            if (p.doctorId) return p.doctorId === doctorId;
+            if (Array.isArray(p.assignedDoctors)) return p.assignedDoctors.includes(doctorId);
+            return false;
+        });
+
+        const result = assigned.length > 0 ? assigned : all.filter(isPatientCandidate);
+
+        res.json(result.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null })));
+        return;
+    } catch (err) {
+        console.error("listPatientsForDoctorHttp error:", err);
+        res.status(500).json({ error: "internal" });
+        return;
+    }
 });
