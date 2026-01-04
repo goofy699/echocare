@@ -1,17 +1,77 @@
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { auth } from "@/firebase";
+import { listenToMessages, sendMessage, listenDoctorChats } from "@/services/chat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Logo } from "@/components/Logo";
 import { LayoutDashboard, Users, Calendar, MessageSquare, BarChart3, Settings, Search, Bell, CheckCircle, Clock, TrendingUp, Star, Send } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 export default function DoctorDashboard() {
+  const navigate = useNavigate();
+  const doctorId = auth.currentUser?.uid;
+
+  const [chats, setChats] = useState<any[]>([]);
+  const [activeChat, setActiveChat] = useState<any | null>(null);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState("");
+
+  // Listen to all chats of this doctor
+  useEffect(() => {
+    if (!doctorId) return;
+
+    const unsubscribe = listenDoctorChats(doctorId, (chatList) => {
+      setChats(chatList);
+      // If no active chat, select first chat automatically
+      if (!activeChat && chatList.length > 0) setActiveChat(chatList[0]);
+    });
+
+    return () => unsubscribe && unsubscribe();
+  }, [doctorId]);
+
+  // Listen to messages in the active chat
+  useEffect(() => {
+    if (!activeChat) return;
+
+    const unsubscribe = listenToMessages(activeChat.id, setMessages);
+    return () => unsubscribe && unsubscribe();
+  }, [activeChat]);
+
+  const { toast } = useToast();
+
+  const handleSend = async () => {
+    if (!newMessage.trim()) {
+      toast({ title: "Empty message", description: "Type a message before sending.", variant: "destructive" });
+      return;
+    }
+    if (!activeChat) {
+      toast({ title: "No active chat", description: "Select a patient to send a message.", variant: "destructive" });
+      return;
+    }
+    if (!doctorId) {
+      toast({ title: "Not signed in", description: "Please sign in to send messages.", variant: "destructive" });
+      return;
+    }
+
+    try {
+      await sendMessage(activeChat.id, doctorId, newMessage);
+      setNewMessage("");
+      toast({ title: "Message sent", description: "Your message was delivered.", variant: "default" });
+    } catch (err) {
+      console.error("sendMessage error:", err);
+      toast({ title: "Send failed", description: "Could not send message. Try again.", variant: "destructive" });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background flex">
       {/* Sidebar */}
       <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
         <Logo className="mb-8" />
-        
+
         <nav className="space-y-2">
           <Button variant="secondary" className="w-full justify-start gap-3">
             <LayoutDashboard className="w-4 h-4" />
@@ -25,7 +85,7 @@ export default function DoctorDashboard() {
             <Calendar className="w-4 h-4" />
             Appointments
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3">
+          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
             <MessageSquare className="w-4 h-4" />
             Messages
           </Button>
@@ -82,11 +142,9 @@ export default function DoctorDashboard() {
           <div className="mb-8">
             <h2 className="text-xl font-semibold mb-6">Recent Patients</h2>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[
-                { name: "John Doe", age: "34 yrs", lastVisit: "2 days ago" },
-                { name: "Jane Smith", age: "45 yrs", lastVisit: "1 week ago" },
-                { name: "Emily Johnson", age: "28 yrs", lastVisit: "3 weeks ago" },
-              ].map((patient, i) => (
+              {[{ name: "John Doe", age: "34 yrs", lastVisit: "2 days ago" },
+              { name: "Jane Smith", age: "45 yrs", lastVisit: "1 week ago" },
+              { name: "Emily Johnson", age: "28 yrs", lastVisit: "3 weeks ago" }].map((patient, i) => (
                 <Card key={i} className="hover:shadow-medium transition-all cursor-pointer">
                   <CardContent className="pt-6">
                     <div className="flex flex-col items-center text-center">
@@ -182,42 +240,40 @@ export default function DoctorDashboard() {
           {/* Patient Chat */}
           <Card>
             <CardHeader>
-              <CardTitle>Patient Chat</CardTitle>
+              <CardTitle>
+                {activeChat ? activeChat.patientName || activeChat.patientId : "Patient Chat"}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-4 mb-4 max-h-64 overflow-y-auto">
-                <div className="flex gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gradient-primary flex-shrink-0"></div>
-                  <div className="flex-1">
-                    <div className="bg-muted p-3 rounded-lg rounded-tl-none max-w-md">
-                      <p className="text-sm">Hello Dr. Smith, I have a question about my prescription.</p>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">John Doe • 10:45 AM</p>
+                {messages.map((m) => (
+                  <div
+                    key={m.id}
+                    className={`max-w-[70%] p-3 rounded-lg text-sm ${m.senderId === doctorId ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"
+                      }`}
+                  >
+                    {m.text}
                   </div>
-                </div>
-
-                <div className="flex gap-3 justify-end">
-                  <div className="flex-1 flex justify-end">
-                    <div className="bg-primary text-primary-foreground p-3 rounded-lg rounded-tr-none max-w-md">
-                      <p className="text-sm">Of course, John. What can I help you with?</p>
-                    </div>
-                  </div>
-                </div>
-
-                <p className="text-xs text-center text-muted-foreground">10:48 AM</p>
+                ))}
               </div>
 
               <div className="flex gap-2">
-                <Input placeholder="Type a message..." className="flex-1" />
-                <Button size="icon">
+                <Input
+                  placeholder="Type a message..."
+                  value={newMessage}
+                  onChange={(e) => setNewMessage(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
+                  className="flex-1"
+                />
+                <Button size="icon" onClick={handleSend} disabled={!newMessage.trim() || !activeChat || !doctorId}>
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
             </CardContent>
           </Card>
 
-          <Button 
-            variant="destructive" 
+          <Button
+            variant="destructive"
             className="w-14 h-14 rounded-full fixed bottom-6 right-6 shadow-lg"
           >
             SOS
