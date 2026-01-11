@@ -1,21 +1,30 @@
-// src/App.tsx
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import Unauthorized from "./pages/Unauthorized";
-import Landing from "./pages/Landing";
-import Auth from "./pages/Auth";
-import VerifyOtp from "./pages/VerifyOtp";
+import Unauthorized from "./Unauthorized";
+import Landing from "./Landing";
+import Auth from "./Auth";
+import VerifyOtp from "./VerifyOtp";
 
-import PatientDashboard from "./pages/PatientDashboard";
-import DoctorDashboard from "./pages/DoctorDashboard";
-import CaregiverDashboard from "./pages/CaregiverDashboard";
-import AdminDashboard from "./pages/AdminDashboard";
+import PatientDashboard from "./PatientDashboard";
+import PatientHome from "./patient/Home";
+import PatientChatbot from "./patient/Chatbot";
+import PatientAppointments from "./patient/Appointments";
+import PatientReminders from "./patient/Reminders";
+import PatientReports from "./patient/Reports";
+import PatientMessages from "./patient/Messages";
 
-import NotFound from "./pages/NotFound";
+import DoctorDashboard from "./DoctorDashboard";
+import DoctorMessages from "./doctor/DoctorMessages";
+
+import CaregiverDashboard from "./CaregiverDashboard";
+import AdminDashboard from "./AdminDashboard";
+import CompleteProfile from "./CompleteProfile";
+
+import NotFound from "./NotFound";
 
 import ProtectedRoute from "@/components/ProtectedRoute";
 import RoleRoute from "@/components/RoleRoute";
@@ -36,16 +45,24 @@ export default function App() {
             <Route path="/verify-otp" element={<VerifyOtp />} />
             <Route path="/unauthorized" element={<Unauthorized />} />
 
-            {/* Protected routes (must be logged in) */}
+            {/* Protected routes */}
             <Route element={<ProtectedRoute />}>
               {/* Patient only */}
               <Route element={<RoleRoute allow={["patient"]} />}>
-                <Route path="/patient" element={<PatientDashboard />} />
+                <Route path="/patient" element={<PatientDashboard />}>
+                  <Route index element={<PatientHome />} />
+                  <Route path="chatbot" element={<PatientChatbot />} />
+                  <Route path="appointments" element={<PatientAppointments />} />
+                  <Route path="reminders" element={<PatientReminders />} />
+                  <Route path="messages" element={<PatientMessages />} />
+                  <Route path="reports" element={<PatientReports />} />
+                </Route>
               </Route>
 
               {/* Doctor only */}
               <Route element={<RoleRoute allow={["doctor"]} />}>
                 <Route path="/doctor" element={<DoctorDashboard />} />
+                <Route path="/doctor/messages" element={<DoctorMessages />} />
               </Route>
 
               {/* Caregiver only */}
@@ -57,6 +74,9 @@ export default function App() {
               <Route element={<RoleRoute allow={["admin"]} />}>
                 <Route path="/admin" element={<AdminDashboard />} />
               </Route>
+
+              {/* Complete profile (any authenticated user) */}
+              <Route path="/complete-profile" element={<CompleteProfile />} />
             </Route>
 
             {/* 404 */}
