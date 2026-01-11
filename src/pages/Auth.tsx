@@ -35,6 +35,7 @@ type PendingSignup = {
   email: string;
   password: string;
   role: UserRole;
+  name?: string;
   otp: string;
   expiresAt: number;
 };
@@ -51,6 +52,7 @@ export default function Auth() {
   const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
   const roles = [
@@ -122,6 +124,12 @@ export default function Auth() {
     try {
       if (type === "signup") {
         // ✅ SIGN UP = send OTP (client side) + store pending in localStorage temporarily
+        if (!name.trim()) {
+          toast.error("Please enter your full name to sign up.");
+          setIsLoading(false);
+          return;
+        }
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const expiresAt = Date.now() + 10 * 60 * 1000;
 
@@ -132,6 +140,7 @@ export default function Auth() {
             email,
             password,
             role: selectedRole,
+            name: name.trim(),
             otp,
             expiresAt,
           };
@@ -154,6 +163,7 @@ export default function Auth() {
         // ✅ READ ROLE FROM FIRESTORE (source of truth)
         const snap = await getDoc(doc(db, "users", cred.user.uid));
         const storedRole = (snap.data()?.role as UserRole) || null;
+        const storedName = snap.data()?.name as string | undefined;
 
         if (!storedRole) {
           toast.error(
@@ -169,6 +179,13 @@ export default function Auth() {
             `Wrong role selected. This email is registered as "${storedRole}". Please choose "${storedRole}" to continue.`
           );
           await signOut(auth);
+          return;
+        }
+
+        // If user has no name yet, ask them to complete profile
+        if (!storedName) {
+          toast("Please complete your profile.");
+          navigate("/complete-profile", { replace: true });
           return;
         }
 
@@ -396,6 +413,16 @@ export default function Auth() {
                         onChange={(e) => setPassword(e.target.value)}
                       />
                     </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="name-signup">Full name</Label>
+                    <Input
+                      id="name-signup"
+                      placeholder="Your full name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
                   </div>
 
                   <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-lg flex gap-2">

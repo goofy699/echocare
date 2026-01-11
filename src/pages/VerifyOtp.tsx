@@ -33,6 +33,7 @@ type PendingSignup = {
     email: string;
     password: string;
     role: UserRole;
+    name?: string;
     otp: string;
     expiresAt: number;
 };
@@ -86,18 +87,29 @@ export default function VerifyOtp() {
                 pending.password
             );
 
-            // 2) ✅ Save role (also keep displayName for compatibility)
-            await updateProfile(cred.user, { displayName: pending.role });
-
-            // ✅ STORE ROLE IN FIRESTORE (REAL SOURCE OF TRUTH)
-            await setDoc(doc(db, "users", cred.user.uid), {
-                email: pending.email,
-                role: pending.role,
-                createdAt: serverTimestamp(),
-            });
-
-            // 3) Sign in user
+            // 2) Ensure the user is signed in (createUser should sign them in but ensure it explicitly)
             await signInWithEmailAndPassword(auth, pending.email, pending.password);
+
+            // 3) ✅ Save display name (if provided) and role
+            try {
+                if (pending.name) await updateProfile(cred.user, { displayName: pending.name });
+            } catch (e) {
+                // ignore
+            }
+
+            // ✅ STORE ROLE AND NAME IN FIRESTORE (REAL SOURCE OF TRUTH)
+            try {
+                await setDoc(doc(db, "users", cred.user.uid), {
+                    email: pending.email,
+                    role: pending.role,
+                    name: pending.name || null,
+                    createdAt: serverTimestamp(),
+                });
+            } catch (err) {
+                console.error("Failed to write user doc during signup:", err);
+                // If rule blocked the write, show a helpful message
+                toast.error("Could not save user profile. Check rules or network.");
+            }
 
             toast.success("Account created and verified!");
 
