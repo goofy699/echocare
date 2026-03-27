@@ -160,8 +160,8 @@ export default function PatientChatbot() {
 
                                 <div
                                     className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 ${message.role === "user"
-                                            ? "bg-primary text-primary-foreground"
-                                            : "bg-secondary text-secondary-foreground"
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-secondary text-secondary-foreground"
                                         }`}
                                 >
                                     <p className="text-sm sm:text-base whitespace-pre-line">
@@ -169,8 +169,8 @@ export default function PatientChatbot() {
                                     </p>
                                     <p
                                         className={`text-xs mt-2 ${message.role === "user"
-                                                ? "text-primary-foreground/70"
-                                                : "text-muted-foreground"
+                                            ? "text-primary-foreground/70"
+                                            : "text-muted-foreground"
                                             }`}
                                     >
                                         {message.timestamp.toLocaleTimeString([], {
