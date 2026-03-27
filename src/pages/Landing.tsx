@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Navbar } from "@/components/Navbar";
-import { MessageSquare, Bell, Activity, ArrowRight, Facebook, Twitter, Linkedin } from "lucide-react";
+import { MessageSquare, Bell, Stethoscope, HeartPulse, CheckCircle2, Facebook, Twitter, Linkedin } from "lucide-react";
 import { Link } from "react-router-dom";
 import doctorHero from "@/assets/doctor-hero.jpg";
 
@@ -9,18 +9,23 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
-      
+
       {/* Hero Section */}
-      <section className="pt-32 pb-20 px-4 sm:px-6 lg:px-8">
+      <section className="pt-28 pb-20 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-emerald-50/80 via-cyan-50/60 to-background">
         <div className="container mx-auto">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div className="space-y-8">
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight">
-                AI-Powered Preventive Healthcare for{" "}
-                <span className="text-primary">Everyone.</span>
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-white px-4 py-2 text-sm text-emerald-700 shadow-sm">
+                <HeartPulse className="w-4 h-4" />
+                Care that stays with you daily
+              </div>
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold leading-tight tracking-tight">
+                Health Management Built for
+                <span className="text-primary"> Real Life</span>
               </h1>
               <p className="text-lg text-muted-foreground max-w-xl">
-                Discover a smarter way to manage your health with personalized insights, timely reminders, and real-time monitoring.
+                EchoCare helps patients and doctors stay connected with smart reminders,
+                secure messaging, and clear health updates from one trusted dashboard.
               </p>
               <div className="flex flex-wrap gap-4">
                 <Link to="/auth">
@@ -28,14 +33,16 @@ export default function Landing() {
                     Get Started
                   </Button>
                 </Link>
-                <Button size="lg" variant="outline" className="text-base">
-                  Learn More
-                </Button>
+                <a href="#about">
+                  <Button size="lg" variant="outline" className="text-base">
+                    Learn More
+                  </Button>
+                </a>
               </div>
             </div>
-            
+
             <div className="relative">
-              <div className="absolute inset-0 bg-gradient-primary rounded-3xl blur-3xl opacity-20"></div>
+              <div className="absolute inset-0 rounded-3xl blur-3xl opacity-25 bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.35),transparent_65%)]"></div>
               <img
                 src={doctorHero}
                 alt="Healthcare Professional"
@@ -86,13 +93,54 @@ export default function Landing() {
             <Card className="border-2 hover:border-primary/50 transition-all hover:shadow-medium">
               <CardHeader>
                 <div className="w-12 h-12 rounded-xl bg-accent/10 flex items-center justify-center mb-4">
-                  <Activity className="w-6 h-6 text-accent" />
+                  <Stethoscope className="w-6 h-6 text-accent" />
                 </div>
-                <CardTitle>Real-Time Monitoring</CardTitle>
+                <CardTitle>Care Team Updates</CardTitle>
                 <CardDescription>
-                  Securely track vital signs and share health data with your care team from anywhere.
+                  Keep doctors and patients aligned with clear status updates and shared treatment notes.
                 </CardDescription>
               </CardHeader>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* About Section */}
+      <section id="about" className="py-20 px-4 sm:px-6 lg:px-8">
+        <div className="container mx-auto">
+          <div className="grid lg:grid-cols-2 gap-10 items-start">
+            <div>
+              <h2 className="text-3xl sm:text-4xl font-bold mb-4">About EchoCare</h2>
+              <p className="text-muted-foreground mb-6 leading-relaxed">
+                We built EchoCare to remove friction from everyday healthcare.
+                Patients get clear guidance and faster support, while doctors get
+                cleaner communication and better continuity of care.
+              </p>
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-success mt-0.5" />
+                  <p className="text-sm text-muted-foreground">Role-based dashboards for patients, doctors, and caregivers.</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-success mt-0.5" />
+                  <p className="text-sm text-muted-foreground">Simple appointment booking and secure file sharing in chat.</p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-success mt-0.5" />
+                  <p className="text-sm text-muted-foreground">Designed for preventive care, continuity, and daily follow-through.</p>
+                </div>
+              </div>
+            </div>
+            <Card className="border-2">
+              <CardHeader>
+                <CardTitle>Why teams choose EchoCare</CardTitle>
+                <CardDescription>Built to feel practical from day one.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4 text-sm text-muted-foreground">
+                <p>Patients can quickly connect to their doctor and track appointments without jumping across tools.</p>
+                <p>Doctors can update availability, manage profiles, and communicate from one workspace.</p>
+                <p>Admins and caregivers get visibility that supports safer care decisions.</p>
+              </CardContent>
             </Card>
           </div>
         </div>
@@ -121,13 +169,8 @@ export default function Landing() {
                   </div>
                 </div>
                 <p className="text-lg italic text-muted-foreground mb-4">
-                  "EchoCare has revolutionized how I manage my chronic condition. The real-time monitoring gives me and my doctor peace of mind."
+                  "EchoCare made my appointments and follow-ups way easier. I can message my doctor and keep everything organized in one place."
                 </p>
-                <div className="flex gap-2">
-                  <Button size="icon" variant="ghost" className="rounded-full">
-                    <ArrowRight className="w-4 h-4" />
-                  </Button>
-                </div>
               </CardContent>
             </Card>
           </div>

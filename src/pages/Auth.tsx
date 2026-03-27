@@ -24,6 +24,18 @@ import { sendOtpEmail } from "@/lib/email";
 
 type UserRole = "patient" | "doctor" | "caregiver" | "admin";
 
+type PatientSignupProfile = {
+  age: string;
+  gender: string;
+  bloodType: string;
+  allergies: string;
+  chronicConditions: string;
+  currentMedications: string;
+  primaryConcern: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+};
+
 const ROLE_ROUTES: Record<UserRole, string> = {
   patient: "/patient",
   doctor: "/doctor",
@@ -36,6 +48,17 @@ type PendingSignup = {
   password: string;
   role: UserRole;
   name?: string;
+  patientProfile?: {
+    age?: number;
+    gender?: string;
+    bloodType?: string;
+    allergies?: string[];
+    chronicConditions?: string[];
+    currentMedications?: string[];
+    primaryConcern?: string;
+    emergencyContactName?: string;
+    emergencyContactPhone?: string;
+  };
   otp: string;
   expiresAt: number;
 };
@@ -53,7 +76,24 @@ export default function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [patientProfile, setPatientProfile] = useState<PatientSignupProfile>({
+    age: "",
+    gender: "",
+    bloodType: "",
+    allergies: "",
+    chronicConditions: "",
+    currentMedications: "",
+    primaryConcern: "",
+    emergencyContactName: "",
+    emergencyContactPhone: "",
+  });
   const [isLoading, setIsLoading] = useState(false);
+
+  const normalizeCsv = (value: string) =>
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
 
   const roles = [
     {
@@ -61,28 +101,28 @@ export default function Auth() {
       title: "Patient",
       description: "Access your health records and appointments.",
       icon: User,
-      color: "bg-blue-100 text-blue-600",
+      color: "bg-cyan-100 text-cyan-700",
     },
     {
       id: "doctor" as UserRole,
       title: "Doctor",
       description: "Manage patient consultations and schedules.",
       icon: Stethoscope,
-      color: "bg-teal-100 text-teal-600",
+      color: "bg-emerald-100 text-emerald-700",
     },
     {
       id: "caregiver" as UserRole,
       title: "Caregiver",
       description: "Support and monitor your loved one's care.",
       icon: Users,
-      color: "bg-orange-100 text-orange-600",
+      color: "bg-sky-100 text-sky-700",
     },
     {
       id: "admin" as UserRole,
       title: "Admin",
       description: "Oversee platform operations and users.",
       icon: Shield,
-      color: "bg-purple-100 text-purple-600",
+      color: "bg-teal-100 text-teal-700",
     },
   ];
 
@@ -105,6 +145,18 @@ export default function Auth() {
     setSelectedRole(role);
     setEmail("");
     setPassword("");
+    setName("");
+    setPatientProfile({
+      age: "",
+      gender: "",
+      bloodType: "",
+      allergies: "",
+      chronicConditions: "",
+      currentMedications: "",
+      primaryConcern: "",
+      emergencyContactName: "",
+      emergencyContactPhone: "",
+    });
     setTab("signin");
   };
 
@@ -130,6 +182,20 @@ export default function Auth() {
           return;
         }
 
+        if (selectedRole === "patient") {
+          if (!patientProfile.age || Number.isNaN(Number(patientProfile.age))) {
+            toast.error("Please provide a valid age.");
+            setIsLoading(false);
+            return;
+          }
+
+          if (!patientProfile.bloodType.trim()) {
+            toast.error("Please provide your blood group.");
+            setIsLoading(false);
+            return;
+          }
+        }
+
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
         const expiresAt = Date.now() + 10 * 60 * 1000;
 
@@ -141,6 +207,21 @@ export default function Auth() {
             password,
             role: selectedRole,
             name: name.trim(),
+            ...(selectedRole === "patient"
+              ? {
+                patientProfile: {
+                  age: Number(patientProfile.age) || undefined,
+                  gender: patientProfile.gender.trim() || undefined,
+                  bloodType: patientProfile.bloodType.trim() || undefined,
+                  allergies: normalizeCsv(patientProfile.allergies),
+                  chronicConditions: normalizeCsv(patientProfile.chronicConditions),
+                  currentMedications: normalizeCsv(patientProfile.currentMedications),
+                  primaryConcern: patientProfile.primaryConcern.trim() || undefined,
+                  emergencyContactName: patientProfile.emergencyContactName.trim() || undefined,
+                  emergencyContactPhone: patientProfile.emergencyContactPhone.trim() || undefined,
+                },
+              }
+              : {}),
             otp,
             expiresAt,
           };
@@ -157,14 +238,13 @@ export default function Auth() {
           return;
         }
       } else {
-
+        // ✅ SIGN IN
         const cred = await signInWithEmailAndPassword(auth, email, password);
 
         // ✅ READ ROLE FROM FIRESTORE (source of truth)
         const snap = await getDoc(doc(db, "users", cred.user.uid));
         const storedRole = (snap.data()?.role as UserRole) || null;
         const storedName = snap.data()?.name as string | undefined;
-
         if (!storedRole) {
           toast.error(
             "No role found for this account in Firestore. Please contact admin or sign up again."
@@ -215,24 +295,13 @@ export default function Auth() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-hero flex items-center justify-center p-4 relative">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,hsl(var(--primary)/0.14),transparent_45%),radial-gradient(circle_at_bottom_right,hsl(var(--accent)/0.14),transparent_45%),linear-gradient(to_bottom,hsl(180_45%_97%),hsl(0_0%_100%))] flex items-center justify-center p-4 relative">
       <div className="absolute top-4 left-4 sm:top-6 sm:left-6">
         <Button
           onClick={() => navigate("/", { replace: true })}
           size="sm"
-          className="
-            rounded-full
-            bg-white/80
-            text-primary
-            border
-            border-primary/30
-            hover:bg-white
-            hover:border-primary
-            shadow-sm
-            transition-all
-            px-3 py-1.5
-            text-xs sm:text-sm
-          "
+          variant="outline"
+          className="rounded-full bg-white/90 border-primary/30 text-xs sm:text-sm"
         >
           ← Back to Home
         </Button>
@@ -243,7 +312,7 @@ export default function Auth() {
           <Logo className="justify-center mb-4" />
           {!selectedRole && (
             <>
-              <h1 className="text-3xl sm:text-4xl font-bold mb-2">
+              <h1 className="text-3xl sm:text-4xl font-bold mb-2 tracking-tight">
                 Welcome to EchoCare
               </h1>
               <p className="text-muted-foreground text-sm sm:text-base">
@@ -260,7 +329,7 @@ export default function Auth() {
               return (
                 <Card
                   key={role.id}
-                  className="cursor-pointer hover:shadow-medium transition-all hover:scale-[1.02] sm:hover:scale-105 border-2 hover:border-primary"
+                  className="cursor-pointer hover:shadow-medium transition-all hover:scale-[1.02] sm:hover:scale-105 border-2 hover:border-primary/60 bg-white/95"
                   onClick={() => handleRoleSelect(role.id)}
                 >
                   <CardHeader className="text-center">
@@ -281,7 +350,7 @@ export default function Auth() {
             })}
           </div>
         ) : (
-          <Card className="max-w-md mx-auto">
+          <Card className="max-w-md mx-auto bg-white/95 border-primary/15 shadow-large">
             <CardHeader>
               <Button
                 onClick={() => {
@@ -291,20 +360,8 @@ export default function Auth() {
                   setTab("signin");
                 }}
                 size="sm"
-                className="
-                  mb-4
-                  rounded-full
-                  bg-white/80
-                  text-primary
-                  border
-                  border-primary/30
-                  hover:bg-white
-                  hover:border-primary
-                  shadow-sm
-                  transition-all
-                  px-3 py-1.5
-                  text-xs sm:text-sm
-                "
+                variant="outline"
+                className="mb-4 rounded-full border-primary/30 text-xs sm:text-sm"
               >
                 ← Back to roles
               </Button>
@@ -349,6 +406,8 @@ export default function Auth() {
                         variant="link"
                         size="sm"
                         className="p-0 h-auto text-primary text-xs sm:text-sm"
+                        onClick={() => navigate("/forgot-password")}
+                        type="button"
                       >
                         Forgot Password?
                       </Button>
@@ -424,6 +483,122 @@ export default function Auth() {
                       onChange={(e) => setName(e.target.value)}
                     />
                   </div>
+
+                  {selectedRole === "patient" && (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="patient-age">Age</Label>
+                          <Input
+                            id="patient-age"
+                            type="number"
+                            min={0}
+                            placeholder="e.g. 42"
+                            value={patientProfile.age}
+                            onChange={(e) =>
+                              setPatientProfile((prev) => ({ ...prev, age: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="patient-gender">Gender</Label>
+                          <Input
+                            id="patient-gender"
+                            placeholder="e.g. Female"
+                            value={patientProfile.gender}
+                            onChange={(e) =>
+                              setPatientProfile((prev) => ({ ...prev, gender: e.target.value }))
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="patient-blood">Blood Group</Label>
+                        <Input
+                          id="patient-blood"
+                          placeholder="e.g. O+"
+                          value={patientProfile.bloodType}
+                          onChange={(e) =>
+                            setPatientProfile((prev) => ({ ...prev, bloodType: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="patient-allergies">Allergies (comma separated)</Label>
+                        <Input
+                          id="patient-allergies"
+                          placeholder="e.g. Penicillin, peanuts"
+                          value={patientProfile.allergies}
+                          onChange={(e) =>
+                            setPatientProfile((prev) => ({ ...prev, allergies: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="patient-problems">Medical Problems / Chronic Conditions</Label>
+                        <Input
+                          id="patient-problems"
+                          placeholder="e.g. Hypertension, asthma"
+                          value={patientProfile.chronicConditions}
+                          onChange={(e) =>
+                            setPatientProfile((prev) => ({ ...prev, chronicConditions: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="patient-meds">Current Medications</Label>
+                        <Input
+                          id="patient-meds"
+                          placeholder="e.g. Metformin, Atorvastatin"
+                          value={patientProfile.currentMedications}
+                          onChange={(e) =>
+                            setPatientProfile((prev) => ({ ...prev, currentMedications: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="patient-primary-concern">Primary Health Concern</Label>
+                        <Input
+                          id="patient-primary-concern"
+                          placeholder="e.g. recurring headaches"
+                          value={patientProfile.primaryConcern}
+                          onChange={(e) =>
+                            setPatientProfile((prev) => ({ ...prev, primaryConcern: e.target.value }))
+                          }
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="space-y-2">
+                          <Label htmlFor="patient-emergency-name">Emergency Contact Name</Label>
+                          <Input
+                            id="patient-emergency-name"
+                            placeholder="e.g. Jane Doe"
+                            value={patientProfile.emergencyContactName}
+                            onChange={(e) =>
+                              setPatientProfile((prev) => ({ ...prev, emergencyContactName: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="patient-emergency-phone">Emergency Contact Phone</Label>
+                          <Input
+                            id="patient-emergency-phone"
+                            placeholder="e.g. +1 555..."
+                            value={patientProfile.emergencyContactPhone}
+                            onChange={(e) =>
+                              setPatientProfile((prev) => ({ ...prev, emergencyContactPhone: e.target.value }))
+                            }
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
 
                   <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-lg flex gap-2">
                     <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />

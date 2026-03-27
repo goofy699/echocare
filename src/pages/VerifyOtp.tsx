@@ -34,6 +34,17 @@ type PendingSignup = {
     password: string;
     role: UserRole;
     name?: string;
+    patientProfile?: {
+        age?: number;
+        gender?: string;
+        bloodType?: string;
+        allergies?: string[];
+        chronicConditions?: string[];
+        currentMedications?: string[];
+        primaryConcern?: string;
+        emergencyContactName?: string;
+        emergencyContactPhone?: string;
+    };
     otp: string;
     expiresAt: number;
 };
@@ -99,10 +110,35 @@ export default function VerifyOtp() {
 
             // ✅ STORE ROLE AND NAME IN FIRESTORE (REAL SOURCE OF TRUTH)
             try {
+                const isPatient = pending.role === "patient";
                 await setDoc(doc(db, "users", cred.user.uid), {
                     email: pending.email,
                     role: pending.role,
                     name: pending.name || null,
+                    ...(isPatient
+                        ? {
+                            age: pending.patientProfile?.age ?? null,
+                            gender: pending.patientProfile?.gender ?? null,
+                            bloodType: pending.patientProfile?.bloodType ?? null,
+                            allergies: pending.patientProfile?.allergies ?? [],
+                            chronicConditions: pending.patientProfile?.chronicConditions ?? [],
+                            currentMedications: pending.patientProfile?.currentMedications ?? [],
+                            primaryConcern: pending.patientProfile?.primaryConcern ?? null,
+                            emergencyContactName: pending.patientProfile?.emergencyContactName ?? null,
+                            emergencyContactPhone: pending.patientProfile?.emergencyContactPhone ?? null,
+                            patientProfile: {
+                                age: pending.patientProfile?.age ?? null,
+                                gender: pending.patientProfile?.gender ?? null,
+                                bloodType: pending.patientProfile?.bloodType ?? null,
+                                allergies: pending.patientProfile?.allergies ?? [],
+                                chronicConditions: pending.patientProfile?.chronicConditions ?? [],
+                                currentMedications: pending.patientProfile?.currentMedications ?? [],
+                                primaryConcern: pending.patientProfile?.primaryConcern ?? null,
+                                emergencyContactName: pending.patientProfile?.emergencyContactName ?? null,
+                                emergencyContactPhone: pending.patientProfile?.emergencyContactPhone ?? null,
+                            },
+                        }
+                        : {}),
                     createdAt: serverTimestamp(),
                 });
             } catch (err) {
