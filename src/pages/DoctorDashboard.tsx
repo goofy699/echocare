@@ -1,68 +1,215 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { auth } from "@/firebase";
-import { listenToMessages, sendMessage, listenDoctorChats } from "@/services/chat";
+import { auth, db } from "@/firebase";
+import { createChat, listenPatientsForDoctor, listenToMessages, sendMessage, uploadChatAttachment } from "../services/chat";
+import { listenAppointmentsByDoctor } from "@/services/appointments";
+import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Logo } from "@/components/Logo";
-import { LayoutDashboard, Users, Calendar, MessageSquare, BarChart3, Settings, Search, Bell, CheckCircle, Clock, TrendingUp, Star, Send } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { LayoutDashboard, Users, Calendar, MessageSquare, BarChart3, Settings, Search, Bell, CheckCircle, TrendingUp, Star, Bot, X, Paperclip, FileText } from "lucide-react";
+import { format } from "date-fns";
+import { AppointmentRecord } from "@/services/appointments";
 
 export default function DoctorDashboard() {
   const navigate = useNavigate();
   const doctorId = auth.currentUser?.uid;
 
-  const [chats, setChats] = useState<any[]>([]);
-  const [activeChat, setActiveChat] = useState<any | null>(null);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [newMessage, setNewMessage] = useState("");
+  const [patients, setPatients] = useState<any[]>([]);
+  const [patientsLoading, setPatientsLoading] = useState(true);
+  const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+  const [isAvailable, setIsAvailable] = useState(true);
+  const [availabilitySaving, setAvailabilitySaving] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState<any | null>(null);
+  const [showMiniChat, setShowMiniChat] = useState(false);
+  const [showAiDummy, setShowAiDummy] = useState(false);
+  const [miniMessages, setMiniMessages] = useState<any[]>([]);
+  const [miniMessage, setMiniMessage] = useState("");
+  const [miniSending, setMiniSending] = useState(false);
+  const [miniSelectedFile, setMiniSelectedFile] = useState<File | null>(null);
+  const miniFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Listen to all chats of this doctor
+  const isReportMessage = (text?: string) =>
+    typeof text === "string" && text.trim().startsWith("[REPORT]");
+
+  const goToChat = (patientId?: string) => {
+    if (patientId) {
+      localStorage.setItem("doctor_selected_patient_id", patientId);
+    }
+    navigate("/doctor/messages");
+  };
+
+  const miniChatPatient = selectedPatient || patients[0] || null;
+  const miniChatId = doctorId && miniChatPatient?.id
+    ? [miniChatPatient.id, doctorId].sort().join("_")
+    : "";
+
   useEffect(() => {
     if (!doctorId) return;
 
-    const unsubscribe = listenDoctorChats(doctorId, (chatList) => {
-      setChats(chatList);
-      // If no active chat, select first chat automatically
-      if (!activeChat && chatList.length > 0) setActiveChat(chatList[0]);
+    const unsubscribe = onSnapshot(doc(db, "users", doctorId), (snap) => {
+      const data = snap.data() as any;
+      const availability = data?.availability;
+      setIsAvailable(availability !== "unavailable");
     });
 
-    return () => unsubscribe && unsubscribe();
+    return () => unsubscribe();
   }, [doctorId]);
 
-  // Listen to messages in the active chat
+  const toggleAvailability = async (next: boolean) => {
+    if (!doctorId) return;
+
+    setIsAvailable(next);
+    setAvailabilitySaving(true);
+    try {
+      await setDoc(
+        doc(db, "users", doctorId),
+        {
+          availability: next ? "available" : "unavailable",
+          availabilityUpdatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      console.error("Failed to update doctor availability:", error);
+      setIsAvailable(!next);
+    } finally {
+      setAvailabilitySaving(false);
+    }
+  };
+
+  // Load real patients
   useEffect(() => {
-    if (!activeChat) return;
-
-    const unsubscribe = listenToMessages(activeChat.id, setMessages);
-    return () => unsubscribe && unsubscribe();
-  }, [activeChat]);
-
-  const { toast } = useToast();
-
-  const handleSend = async () => {
-    if (!newMessage.trim()) {
-      toast({ title: "Empty message", description: "Type a message before sending.", variant: "destructive" });
-      return;
-    }
-    if (!activeChat) {
-      toast({ title: "No active chat", description: "Select a patient to send a message.", variant: "destructive" });
-      return;
-    }
     if (!doctorId) {
-      toast({ title: "Not signed in", description: "Please sign in to send messages.", variant: "destructive" });
+      setPatientsLoading(false);
       return;
     }
+
+    let mounted = true;
+    setPatientsLoading(true);
+
+    const unsubscribe = listenPatientsForDoctor(doctorId, (list) => {
+      if (!mounted) return;
+      const nextPatients = list.filter((u: any) => u.role === "patient");
+      setPatients(nextPatients);
+      if (nextPatients.length > 0 && !selectedPatient) {
+        setSelectedPatient(nextPatients[0]);
+      }
+      setPatientsLoading(false);
+    });
+
+    return () => {
+      mounted = false;
+      unsubscribe?.();
+    };
+  }, [doctorId, selectedPatient]);
+
+  useEffect(() => {
+    if (!showMiniChat || !doctorId || !miniChatId || !miniChatPatient) return;
+
+    createChat(miniChatId, miniChatPatient.id, doctorId, miniChatPatient.name || miniChatPatient.displayName || miniChatPatient.email || miniChatPatient.id);
+
+    const unsubscribe = listenToMessages(miniChatId, (msgs) => {
+      setMiniMessages((msgs || []).filter((m: any) => !isReportMessage(m?.text)));
+    });
+
+    return () => unsubscribe();
+  }, [doctorId, miniChatId, miniChatPatient, showMiniChat]);
+
+  // Load real appointments
+  useEffect(() => {
+    if (!doctorId) return;
+    const unsubscribe = listenAppointmentsByDoctor(doctorId, (list) => {
+      const now = new Date();
+      // Only upcoming appointments, sorted by date, max 5
+      const upcoming = list
+        .filter((a) => a.scheduledAt.getTime() >= now.getTime())
+        .slice(0, 5);
+      setAppointments(upcoming);
+    });
+    return () => unsubscribe();
+  }, [doctorId]);
+
+  function StatusBadge({ status }: { status: string }) {
+    if (status === "confirmed")
+      return <Badge className="bg-success/10 text-success hover:bg-success/20">Confirmed</Badge>;
+    if (status === "cancelled")
+      return <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/20">Cancelled</Badge>;
+    return <Badge className="bg-warning/10 text-warning hover:bg-warning/20">Pending</Badge>;
+  }
+
+  const downloadAttachment = async (attachment: any) => {
+    const fileName = attachment?.name || "document.pdf";
+    try {
+      if (attachment?.dataBase64) {
+        const link = document.createElement("a");
+        link.href = String(attachment.dataBase64);
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      const url = String(attachment?.url || "");
+      if (!url) throw new Error("No attachment URL");
+
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`download failed: ${response.status}`);
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      console.error("mini attachment download failed:", error);
+    }
+  };
+
+  const onMiniFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] || null;
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
+
+    if (!isImage && !isPdf) {
+      event.target.value = "";
+      return;
+    }
+
+    if (miniFileInputRef.current) miniFileInputRef.current.value = "";
+    setMiniSelectedFile(file);
+  };
+
+  const sendMiniMessage = async () => {
+    if ((!miniMessage.trim() && !miniSelectedFile) || !doctorId || !miniChatId || !miniChatPatient) return;
 
     try {
-      await sendMessage(activeChat.id, doctorId, newMessage);
-      setNewMessage("");
-      toast({ title: "Message sent", description: "Your message was delivered.", variant: "default" });
-    } catch (err) {
-      console.error("sendMessage error:", err);
-      toast({ title: "Send failed", description: "Could not send message. Try again.", variant: "destructive" });
+      setMiniSending(true);
+      await createChat(miniChatId, miniChatPatient.id, doctorId, miniChatPatient.name || miniChatPatient.displayName || miniChatPatient.email || miniChatPatient.id);
+
+      let attachment;
+      if (miniSelectedFile) {
+        attachment = await uploadChatAttachment(miniChatId, doctorId, miniSelectedFile);
+      }
+
+      await sendMessage(miniChatId, doctorId, miniMessage, attachment);
+      setMiniMessage("");
+      setMiniSelectedFile(null);
+      if (miniFileInputRef.current) miniFileInputRef.current.value = "";
+    } catch (error) {
+      console.error("doctor mini chat send failed:", error);
+    } finally {
+      setMiniSending(false);
     }
   };
 
@@ -71,17 +218,16 @@ export default function DoctorDashboard() {
       {/* Sidebar */}
       <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
         <Logo className="mb-8" />
-
         <nav className="space-y-2">
           <Button variant="secondary" className="w-full justify-start gap-3">
             <LayoutDashboard className="w-4 h-4" />
             Dashboard
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3">
+          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
             <Users className="w-4 h-4" />
             Patients
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3">
+          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
             <Calendar className="w-4 h-4" />
             Appointments
           </Button>
@@ -89,18 +235,28 @@ export default function DoctorDashboard() {
             <MessageSquare className="w-4 h-4" />
             Messages
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3">
+          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
+            <FileText className="w-4 h-4" />
+            Reports
+          </Button>
+          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
             <BarChart3 className="w-4 h-4" />
             Analytics
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3">
+          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/profile")}>
             <Settings className="w-4 h-4" />
             Settings
           </Button>
         </nav>
-
         <div className="mt-auto pt-8">
-          <Button variant="outline" className="w-full justify-start gap-3">
+          <Button
+            variant="outline"
+            className="w-full justify-start gap-3"
+            onClick={() => {
+              auth.signOut();
+              navigate("/auth");
+            }}
+          >
             <span className="text-sm">🚪</span>
             Logout
           </Button>
@@ -116,12 +272,19 @@ export default function DoctorDashboard() {
               <Search className="w-5 h-5 text-muted-foreground" />
               <Input placeholder="Search Patients..." className="border-0 focus-visible:ring-0" />
             </div>
-
             <div className="flex items-center gap-4">
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-success/10 rounded-lg">
-                <div className="w-2 h-2 bg-success rounded-full animate-pulse"></div>
-                <span className="text-sm text-success font-medium">Availability</span>
-                <CheckCircle className="w-4 h-4 text-success" />
+              <div className={`hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg ${isAvailable ? "bg-success/10" : "bg-muted"}`}>
+                <div className={`w-2 h-2 rounded-full ${isAvailable ? "bg-success animate-pulse" : "bg-muted-foreground"}`}></div>
+                <span className={`text-sm font-medium ${isAvailable ? "text-success" : "text-muted-foreground"}`}>
+                  {isAvailable ? "Available" : "Unavailable"}
+                </span>
+                <CheckCircle className={`w-4 h-4 ${isAvailable ? "text-success" : "text-muted-foreground"}`} />
+                <Switch
+                  checked={isAvailable}
+                  onCheckedChange={toggleAvailability}
+                  disabled={availabilitySaving}
+                  aria-label="Toggle doctor availability"
+                />
               </div>
               <Button size="icon" variant="ghost">
                 <Bell className="w-5 h-5" />
@@ -141,22 +304,37 @@ export default function DoctorDashboard() {
           {/* Recent Patients */}
           <div className="mb-8">
             <h2 className="text-xl font-semibold mb-6">Recent Patients</h2>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {[{ name: "John Doe", age: "34 yrs", lastVisit: "2 days ago" },
-              { name: "Jane Smith", age: "45 yrs", lastVisit: "1 week ago" },
-              { name: "Emily Johnson", age: "28 yrs", lastVisit: "3 weeks ago" }].map((patient, i) => (
-                <Card key={i} className="hover:shadow-medium transition-all cursor-pointer">
-                  <CardContent className="pt-6">
-                    <div className="flex flex-col items-center text-center">
-                      <div className="w-20 h-20 rounded-full bg-gradient-primary mb-4"></div>
-                      <h3 className="font-semibold text-lg">{patient.name}</h3>
-                      <p className="text-sm text-muted-foreground">{patient.age}</p>
-                      <p className="text-xs text-muted-foreground mt-1">Last visit: {patient.lastVisit}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+            {patientsLoading ? (
+              <p className="text-sm text-muted-foreground">Loading patients...</p>
+            ) : patients.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No patients found.</p>
+            ) : (
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                {patients.map((patient) => (
+                  <Card key={patient.id} className={`hover:shadow-medium transition-all cursor-pointer ${selectedPatient?.id === patient.id ? "ring-2 ring-primary" : ""}`} onClick={() => setSelectedPatient(patient)}>
+                    <CardContent className="pt-6">
+                      <div className="flex flex-col items-center text-center">
+                        <div className="w-20 h-20 rounded-full bg-gradient-primary mb-4"></div>
+                        <h3 className="font-semibold text-lg">
+                          {patient.name || patient.displayName || "Unknown Patient"}
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {patient.email || patient.id}
+                        </p>
+                        <Badge className="mt-2 bg-primary/10 text-primary">Patient</Badge>
+                        <Button variant="outline" size="sm" className="mt-4" onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedPatient(patient);
+                          goToChat(patient.id);
+                        }}>
+                          Open Chat
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="grid lg:grid-cols-2 gap-8 mb-8">
@@ -172,20 +350,18 @@ export default function DoctorDashboard() {
                       <TrendingUp className="w-4 h-4 text-primary" />
                       <span className="text-sm text-muted-foreground">Consultations</span>
                     </div>
-                    <p className="text-2xl font-bold">32</p>
-                    <p className="text-xs text-muted-foreground">/ Week</p>
+                    <p className="text-2xl font-bold">{patients.length}</p>
+                    <p className="text-xs text-muted-foreground">Total Patients</p>
                   </div>
-
                   <div className="p-4 bg-accent/10 rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
                       <Star className="w-4 h-4 text-accent" />
-                      <span className="text-sm text-muted-foreground">Average Rating</span>
+                      <span className="text-sm text-muted-foreground">Appointments</span>
                     </div>
-                    <p className="text-2xl font-bold">4.9</p>
-                    <p className="text-xs text-muted-foreground">from patients</p>
+                    <p className="text-2xl font-bold">{appointments.length}</p>
+                    <p className="text-xs text-muted-foreground">Upcoming</p>
                   </div>
                 </div>
-
                 <div>
                   <h4 className="font-semibold mb-4">Patient Satisfaction</h4>
                   <div className="h-32 bg-muted/30 rounded-lg flex items-center justify-center">
@@ -195,91 +371,203 @@ export default function DoctorDashboard() {
               </CardContent>
             </Card>
 
-            {/* Upcoming Appointments */}
+            {/* Real Upcoming Appointments */}
             <Card>
               <CardHeader>
-                <CardTitle>Upcoming Appointments</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Upcoming Appointments</CardTitle>
+                  <Button variant="ghost" size="sm" onClick={() => navigate("/doctor/appointments")}>
+                    View all
+                  </Button>
+                </div>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-start gap-4 p-4 bg-success/10 rounded-lg">
-                  <div className="w-10 h-10 rounded-full bg-gradient-primary flex-shrink-0"></div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <h4 className="font-semibold">Michael Brown</h4>
-                      <Badge className="bg-success/10 text-success hover:bg-success/20">Confirmed</Badge>
+              <CardContent className="space-y-3">
+                {appointments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No upcoming appointments.</p>
+                ) : (
+                  appointments.map((appt) => (
+                    <div
+                      key={appt.id}
+                      className={`flex items-start gap-4 p-4 rounded-lg border ${appt.status === "confirmed" ? "bg-success/5 border-success/20" : "border"
+                        }`}
+                    >
+                      <div className="w-10 h-10 rounded-full bg-gradient-primary flex-shrink-0"></div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1 gap-2">
+                          <h4 className="font-semibold truncate">{appt.patientName}</h4>
+                          <StatusBadge status={appt.status} />
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {format(appt.scheduledAt, "h:mm a")} • {format(appt.scheduledAt, "MMM d")}
+                        </p>
+                        {appt.location && (
+                          <p className="text-xs text-muted-foreground truncate">{appt.location}</p>
+                        )}
+                      </div>
                     </div>
-                    <p className="text-sm text-muted-foreground">10:30 AM • Today</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-4 p-4 border rounded-lg">
-                  <div className="w-10 h-10 rounded-full bg-gradient-primary flex-shrink-0"></div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <h4 className="font-semibold">Sarah Davis</h4>
-                      <Badge className="bg-warning/10 text-warning hover:bg-warning/20">Pending</Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">02:00 PM • Today</p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-4 p-4 border rounded-lg">
-                  <div className="w-10 h-10 rounded-full bg-gradient-primary flex-shrink-0"></div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                      <h4 className="font-semibold">David Wilson</h4>
-                      <Badge className="bg-success/10 text-success hover:bg-success/20">Confirmed</Badge>
-                    </div>
-                    <p className="text-sm text-muted-foreground">09:00 AM • Tomorrow</p>
-                  </div>
-                </div>
+                  ))
+                )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Patient Chat */}
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                {activeChat ? activeChat.patientName || activeChat.patientId : "Patient Chat"}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4 mb-4 max-h-64 overflow-y-auto">
-                {messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={`max-w-[70%] p-3 rounded-lg text-sm ${m.senderId === doctorId ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"
-                      }`}
-                  >
-                    {m.text}
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Type a message..."
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  className="flex-1"
-                />
-                <Button size="icon" onClick={handleSend} disabled={!newMessage.trim() || !activeChat || !doctorId}>
-                  <Send className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Button
-            variant="destructive"
-            className="w-14 h-14 rounded-full fixed bottom-6 right-6 shadow-lg"
-          >
+          <Button variant="destructive" className="w-14 h-14 rounded-full fixed bottom-6 left-6 shadow-lg z-50">
             SOS
           </Button>
         </div>
       </main>
+
+      <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-50">
+        <Button
+          className="w-12 h-12 rounded-full shadow-lg bg-accent"
+          onClick={() => {
+            setShowAiDummy(false);
+            setShowMiniChat((prev) => !prev);
+          }}
+        >
+          <MessageSquare className="w-6 h-6" />
+        </Button>
+        <Button
+          variant="outline"
+          className="w-12 h-12 rounded-full shadow-lg bg-white"
+          onClick={() => {
+            setShowMiniChat(false);
+            setShowAiDummy((prev) => !prev);
+          }}
+        >
+          <Bot className="w-6 h-6" />
+        </Button>
+      </div>
+
+      {showMiniChat && (
+        <div className="fixed bottom-24 right-6 w-[min(92vw,360px)] z-50">
+          <Card className="shadow-large border-2">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base">Quick Chat</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    {miniChatPatient ? `with ${miniChatPatient.name || miniChatPatient.displayName || miniChatPatient.email || "patient"}` : "No patient selected"}
+                  </p>
+                </div>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowMiniChat(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="h-52 overflow-y-auto space-y-2 rounded-md border p-2 bg-muted/20">
+                {miniMessages.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Start a quick conversation with your patient.</p>
+                ) : (
+                  miniMessages.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`max-w-[82%] p-2 rounded-md text-xs ${m.senderId === doctorId ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
+                    >
+                      {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
+                      {m.attachment && (
+                        <div className={m.text ? "mt-2" : ""}>
+                          {m.attachment.kind === "image" ? (
+                            <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
+                              <img
+                                src={m.attachment.url}
+                                alt={m.attachment.name || "attachment"}
+                                className="max-h-28 rounded border"
+                              />
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => downloadAttachment(m.attachment)}
+                              className="underline underline-offset-2"
+                            >
+                              {m.attachment.name || "PDF file"}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {miniSelectedFile && (
+                <div className="rounded-md border px-2 py-1.5 text-xs flex items-center justify-between gap-2">
+                  <span className="truncate">{miniSelectedFile.name}</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => {
+                      setMiniSelectedFile(null);
+                      if (miniFileInputRef.current) miniFileInputRef.current.value = "";
+                    }}
+                  >
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <input
+                  ref={miniFileInputRef}
+                  type="file"
+                  accept="image/*,.pdf,application/pdf"
+                  className="hidden"
+                  onChange={onMiniFileChange}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => miniFileInputRef.current?.click()}
+                  disabled={!miniChatPatient || miniSending}
+                >
+                  <Paperclip className="w-4 h-4" />
+                </Button>
+                <Input
+                  placeholder="Type message..."
+                  value={miniMessage}
+                  onChange={(e) => setMiniMessage(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMiniMessage()}
+                  disabled={!miniChatPatient || miniSending}
+                />
+                <Button onClick={sendMiniMessage} disabled={(!miniMessage.trim() && !miniSelectedFile) || !miniChatPatient || miniSending}>
+                  Send
+                </Button>
+              </div>
+
+              <Button variant="ghost" className="w-full" onClick={() => goToChat(miniChatPatient?.id)}>
+                Open Full Chat
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showAiDummy && (
+        <div className="fixed bottom-24 right-6 w-[min(92vw,340px)] z-50">
+          <Card className="shadow-large border-2">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Bot className="w-4 h-4" />
+                  AI Assistant
+                </CardTitle>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowAiDummy(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground">
+                AI chatbot integration is coming soon. This button is active and ready for your future AI service.
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
