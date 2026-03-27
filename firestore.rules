@@ -1,6 +1,21 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return signedIn() && currentUserRole() == 'admin';
+    }
+
+    function isCaregiver() {
+      return signedIn() && currentUserRole() == 'caregiver';
+    }
 
     // Users documents: allow authenticated reads and let a user create/update their own profile
     match /users/{userId} {
@@ -25,6 +40,96 @@ service cloud.firestore {
       match /messages/{msgId} {
         allow read, write: if request.auth != null;
       }
+    }
+
+    // Appointments: patients can create and manage their own bookings.
+    // Doctors can read/update/delete appointments assigned to them.
+    // Caregivers and admins can view/manage appointments for care coordination.
+    match /appointments/{appointmentId} {
+      allow create: if signedIn()
+                    && request.resource.data.patientId == request.auth.uid
+                    && request.resource.data.doctorId is string
+                    && request.resource.data.scheduledAt is timestamp;
+
+      allow read: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid ||
+        resource.data.caregiverId == request.auth.uid ||
+        isCaregiver() ||
+        isAdmin()
+      );
+
+      allow update, delete: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid ||
+        resource.data.caregiverId == request.auth.uid ||
+        isCaregiver() ||
+        isAdmin()
+      );
+    }
+
+    // Reminders: patient-owned reminders persisted from UI.
+    match /reminders/{reminderId} {
+      allow create: if signedIn()
+                    && (
+                      (
+                        request.resource.data.patientId == request.auth.uid
+                        && request.resource.data.createdBy == request.auth.uid
+                      )
+                      ||
+                      (
+                        isCaregiver()
+                        && request.resource.data.createdBy == request.auth.uid
+                        && request.resource.data.patientId is string
+                      )
+                      ||
+                      isAdmin()
+                    )
+                    && request.resource.data.dueAt is timestamp
+                    && request.resource.data.type is string
+                    && request.resource.data.priority is string
+                    && request.resource.data.status == 'pending';
+
+      allow read: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.createdBy == request.auth.uid ||
+        isCaregiver() ||
+        isAdmin()
+      );
+
+      allow update, delete: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.createdBy == request.auth.uid ||
+        isCaregiver() ||
+        isAdmin()
+      );
+    }
+
+    // Reports: patient uploads and sends to a doctor.
+    // Patient can create/read own reports. Assigned doctor can read and mark status.
+    match /reports/{reportId} {
+      allow create: if signedIn()
+                    && request.resource.data.patientId == request.auth.uid
+                    && request.resource.data.doctorId is string
+                    && request.resource.data.attachment is map
+                    && request.resource.data.status in ['pending', 'reviewed'];
+
+      allow read: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow update: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.doctorId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow delete: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        isAdmin()
+      );
     }
 
     // Deny everything else by default
