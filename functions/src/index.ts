@@ -53,7 +53,7 @@ if (!MAIL_USER || !MAIL_PASS) {
    1) SEND OTP
 ========================= */
 
-export const sendOtp = onCall(async (request) => {
+export const sendOtp = onCall({ cors: true }, async (request) => {
     const email = String(request.data?.email || "").trim().toLowerCase();
     const role = request.data?.role;
 
@@ -99,7 +99,7 @@ export const sendOtp = onCall(async (request) => {
    2) VERIFY OTP + CREATE USER
 ========================= */
 
-export const verifyOtpAndCreateUser = onCall(async (request) => {
+export const verifyOtpAndCreateUser = onCall({ cors: true }, async (request) => {
     const rid = String(request.data?.rid || "");
     const otp = String(request.data?.otp || "").trim();
     const password = String(request.data?.password || "");
@@ -187,7 +187,7 @@ export const verifyOtpAndCreateUser = onCall(async (request) => {
    (onCall functions — keep access controlled)
 ========================= */
 
-export const listDoctors = onCall(async (request) => {
+export const listDoctors = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
     if (!auth) throw new HttpsError("unauthenticated", "Not signed in.");
 
@@ -202,7 +202,7 @@ export const listDoctors = onCall(async (request) => {
     return docs.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null }));
 });
 
-export const listPatientsForDoctor = onCall(async (request) => {
+export const listPatientsForDoctor = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
     if (!auth) throw new HttpsError("unauthenticated", "Not signed in.");
 
@@ -239,6 +239,64 @@ export const listPatientsForDoctor = onCall(async (request) => {
     const result = assigned.length > 0 ? assigned : all.filter(isPatientCandidate);
 
     return result.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: d.role || null }));
+});
+
+export const adminCreateUser = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    if (!auth) {
+        throw new HttpsError("unauthenticated", "Not signed in.");
+    }
+
+    const callerDoc = await db.collection("users").doc(auth.uid).get();
+    const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+    if (callerRole !== "admin") {
+        throw new HttpsError("permission-denied", "Admin access required.");
+    }
+
+    const email = String(request.data?.email || "").trim().toLowerCase();
+    const password = String(request.data?.password || "").trim();
+    const role = String(request.data?.role || "").trim().toLowerCase();
+    const name = String(request.data?.name || "").trim();
+
+    if (!email) {
+        throw new HttpsError("invalid-argument", "Email is required.");
+    }
+
+    if (!password || password.length < 6) {
+        throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+    }
+
+    assertRole(role as any);
+
+    let user: admin.auth.UserRecord;
+    try {
+        user = await admin.auth().createUser({
+            email,
+            password,
+            emailVerified: true,
+            displayName: name || undefined,
+        });
+    } catch (error: any) {
+        if (error?.code === "auth/email-already-exists") {
+            throw new HttpsError("already-exists", "Email already exists.");
+        }
+        throw new HttpsError("internal", "Failed to create auth user.");
+    }
+
+    await db.collection("users").doc(user.uid).set({
+        email,
+        role,
+        ...(name ? { name } : {}),
+        createdBy: auth.uid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return {
+        uid: user.uid,
+        email,
+        role,
+    };
 });
 
 // HTTP endpoints with CORS for cross-origin browser fetches
@@ -327,5 +385,114 @@ export const listPatientsForDoctorHttp = onRequest(async (req, res) => {
         console.error("listPatientsForDoctorHttp error:", err);
         res.status(500).json({ error: "internal" });
         return;
+    }
+});
+
+/* =========================
+   RESET PASSWORD (FORGOT PASSWORD FLOW)
+========================= */
+
+export const resetPassword = onCall({ cors: true }, async (request) => {
+    const email = String(request.data?.email || "").trim().toLowerCase();
+    const newPassword = String(request.data?.newPassword || "").trim();
+
+    if (!email) {
+        throw new HttpsError("invalid-argument", "Email is required.");
+    }
+
+    if (!newPassword || newPassword.length < 6) {
+        throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+    }
+
+    try {
+        // Get user by email
+        const userRecord = await admin.auth().getUserByEmail(email);
+
+        // Update password using Admin SDK (no current password needed!)
+        await admin.auth().updateUser(userRecord.uid, {
+            password: newPassword,
+        });
+
+        return {
+            success: true,
+            message: "Password updated successfully",
+        };
+    } catch (error: any) {
+        console.error("resetPassword error:", error);
+
+        if (error.code === "auth/user-not-found") {
+            throw new HttpsError("not-found", "No user found with this email.");
+        }
+
+        throw new HttpsError("internal", "Failed to reset password.");
+    }
+});
+
+/* =========================
+   CHAT ATTACHMENT UPLOAD (CORS-SAFE)
+========================= */
+
+export const uploadChatAttachment = onCall({ cors: true }, async (request) => {
+    if (!request.auth?.uid) {
+        throw new HttpsError("unauthenticated", "Not signed in.");
+    }
+
+    const senderId = request.auth.uid;
+    const chatId = String(request.data?.chatId || "").trim();
+    const fileName = String(request.data?.fileName || "").trim();
+    const contentType = String(request.data?.contentType || "").trim().toLowerCase();
+    const dataBase64Raw = String(request.data?.dataBase64 || "").trim();
+
+    if (!chatId || !fileName || !contentType || !dataBase64Raw) {
+        throw new HttpsError("invalid-argument", "chatId, fileName, contentType and dataBase64 are required.");
+    }
+
+    const isImage = contentType.startsWith("image/");
+    const isPdf = contentType === "application/pdf";
+    if (!isImage && !isPdf) {
+        throw new HttpsError("invalid-argument", "Only image and PDF uploads are supported.");
+    }
+
+    const base64 = dataBase64Raw.includes(",") ? dataBase64Raw.split(",")[1] : dataBase64Raw;
+    if (!base64) {
+        throw new HttpsError("invalid-argument", "Invalid file data.");
+    }
+
+    const buffer = Buffer.from(base64, "base64");
+    const maxBytes = 8 * 1024 * 1024;
+    if (buffer.length > maxBytes) {
+        throw new HttpsError("invalid-argument", "File too large. Max size is 8MB.");
+    }
+
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const objectPath = `chatAttachments/${chatId}/${senderId}/${Date.now()}_${safeName}`;
+
+    try {
+        const bucket = admin.storage().bucket();
+        const token = crypto.randomUUID();
+        const file = bucket.file(objectPath);
+
+        await file.save(buffer, {
+            resumable: false,
+            metadata: {
+                contentType,
+                metadata: {
+                    firebaseStorageDownloadTokens: token,
+                },
+            },
+        });
+
+        const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+
+        return {
+            name: fileName,
+            url,
+            contentType,
+            size: buffer.length,
+            kind: isImage ? "image" : "pdf",
+        };
+    } catch (error) {
+        console.error("uploadChatAttachment error:", error);
+        throw new HttpsError("internal", "Failed to upload attachment.");
     }
 });
