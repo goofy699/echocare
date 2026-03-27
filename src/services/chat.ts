@@ -1,6 +1,7 @@
 import {
     collection,
     addDoc,
+    deleteDoc,
     serverTimestamp,
     query,
     orderBy,
@@ -10,15 +11,20 @@ import {
     where,
     getDoc,
     getDocs,
+    increment,
 } from "firebase/firestore";
-import { db } from "@/firebase";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { auth, db } from "@/firebase";
 
-/**
- * Create or update a chat between patient and doctor
- */
+export interface ChatAttachment {
+    name: string;
+    url: string;
+    dataBase64?: string;
+    contentType: string;
+    size: number;
+    kind: "image" | "pdf";
+}
+
 async function findChatCollection(chatId: string) {
-    // Detect whether an existing chat document is in 'chats' or 'chat' collection.
     try {
         const c1 = await getDoc(doc(db, "chats", chatId));
         if (c1.exists()) return "chats";
@@ -27,7 +33,6 @@ async function findChatCollection(chatId: string) {
     } catch (e) {
         console.warn("findChatCollection error:", e);
     }
-    // default to 'chats'
     return "chats";
 }
 
@@ -47,25 +52,21 @@ export async function createChat(
     };
     if (patientName) payload.patientName = patientName;
 
-    await setDoc(
-        doc(db, coll, chatId),
-        payload,
-        { merge: true }
-    );
+    await setDoc(doc(db, coll, chatId), payload, { merge: true });
     return { chatId, collection: coll };
 }
 
-/**
- * Send a message - now tracks sender role
- */
 export async function sendMessage(
     chatId: string,
     senderId: string,
-    text: string
+    text: string,
+    attachment?: ChatAttachment
 ) {
+    const hasText = !!text?.trim();
+    if (!hasText && !attachment) return;
+
     const coll = await findChatCollection(chatId);
 
-    // Get the chat document to determine sender role
     const chatDoc = await getDoc(doc(db, coll, chatId));
     const chatData = chatDoc.data();
 
@@ -77,41 +78,117 @@ export async function sendMessage(
     const isDoctor = chatData.doctorId === senderId;
     const isPatient = chatData.patientId === senderId;
 
-    // Add message to subcollection
     const messagesRef = collection(db, coll, chatId, "messages");
+    const trimmedText = text?.trim() || "";
     await addDoc(messagesRef, {
         senderId,
-        text,
+        text: trimmedText,
+        ...(attachment ? { attachment } : {}),
         createdAt: serverTimestamp(),
         senderRole: isDoctor ? "doctor" : "patient",
     });
 
-    // Update chat document with role-specific last message
+    const fallbackMessage = attachment
+        ? attachment.kind === "image"
+            ? "📷 Image"
+            : "📄 PDF"
+        : "";
+    const messagePreview = trimmedText || fallbackMessage;
+
     const updatePayload: any = {
-        lastMessage: text,
+        lastMessage: messagePreview,
         updatedAt: serverTimestamp(),
     };
 
     if (isDoctor) {
-        updatePayload.lastMessageFromDoctor = text;
+        updatePayload.lastMessageFromDoctor = messagePreview;
         updatePayload.lastMessageFromDoctorAt = serverTimestamp();
     } else if (isPatient) {
-        updatePayload.lastMessageFromPatient = text;
+        updatePayload.lastMessageFromPatient = messagePreview;
         updatePayload.lastMessageFromPatientAt = serverTimestamp();
     }
 
+    await setDoc(doc(db, coll, chatId), updatePayload, { merge: true });
+}
+
+export async function incrementDoctorReportDownload(chatId: string) {
+    const coll = await findChatCollection(chatId);
     await setDoc(
         doc(db, coll, chatId),
-        updatePayload,
+        {
+            reportDownloadsByDoctor: increment(1),
+            lastReportDownloadedAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        },
         { merge: true }
     );
 }
 
-/**
- * Listen to messages (real-time)
- */
+export async function uploadChatAttachment(
+    chatId: string,
+    _senderId: string,
+    file: File
+): Promise<ChatAttachment> {
+    const lowerName = file.name.toLowerCase();
+    const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
+
+    if (!isImage && !isPdf) {
+        throw new Error("Only images and PDF files are supported.");
+    }
+
+    const maxImageBytes = 8 * 1024 * 1024;
+    const maxPdfBytes = 8 * 1024 * 1024;
+
+    if (isImage && file.size > maxImageBytes) {
+        throw new Error("Image too large. Max size is 8MB.");
+    }
+
+    if (isPdf && file.size > maxPdfBytes) {
+        throw new Error("PDF too large. Max size is 8MB.");
+    }
+
+    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+    const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+
+    if (!cloudName || !uploadPreset) {
+        throw new Error(
+            "Cloudinary is not configured. Add VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET to your .env file."
+        );
+    }
+
+    const endpoint = isPdf
+        ? `https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`
+        : `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_preset", uploadPreset);
+    formData.append("folder", `chatAttachments/${chatId}`);
+
+    const response = await fetch(endpoint, {
+        method: "POST",
+        body: formData,
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+        const message = payload?.error?.message || "Cloudinary upload failed.";
+        throw new Error(message);
+    }
+
+    const secureUrl = String(payload.secure_url || "");
+
+    return {
+        name: file.name,
+        url: secureUrl,
+        contentType: file.type || (isPdf ? "application/pdf" : "application/octet-stream"),
+        size: file.size,
+        kind: isImage ? "image" : "pdf",
+    };
+}
+
 export function listenToMessages(chatId: string, callback: (msgs: any[]) => void) {
-    // Return an unsubscribe function immediately. Internally resolve collection and attach listener.
     let unsub: () => void = () => { };
 
     (async () => {
@@ -122,16 +199,20 @@ export function listenToMessages(chatId: string, callback: (msgs: any[]) => void
                 orderBy("createdAt", "asc")
             );
 
-            unsub = onSnapshot(q, (snapshot) => {
-                const messages = snapshot.docs.map((doc) => ({
-                    id: doc.id,
-                    ...doc.data(),
-                }));
-                callback(messages);
-            }, (err) => {
-                console.error("listenToMessages onSnapshot error:", err);
-                callback([]);
-            });
+            unsub = onSnapshot(
+                q,
+                (snapshot) => {
+                    const messages = snapshot.docs.map((docSnap) => ({
+                        id: docSnap.id,
+                        ...docSnap.data(),
+                    }));
+                    callback(messages);
+                },
+                (err) => {
+                    console.error("listenToMessages onSnapshot error:", err);
+                    callback([]);
+                }
+            );
         } catch (err) {
             console.error("listenToMessages setup error:", err);
             callback([]);
@@ -139,13 +220,14 @@ export function listenToMessages(chatId: string, callback: (msgs: any[]) => void
     })();
 
     return () => {
-        try { unsub(); } catch (e) { /* ignore */ }
+        try {
+            unsub();
+        } catch {
+            // ignore
+        }
     };
 }
 
-/**
- * Listen to all chats for a given doctor (real-time)
- */
 export function listenDoctorChats(doctorId: string, callback: (chats: any[]) => void) {
     const q = query(collection(db, "chats"), where("doctorId", "==", doctorId));
 
@@ -153,10 +235,8 @@ export function listenDoctorChats(doctorId: string, callback: (chats: any[]) => 
         const chatList = await Promise.all(
             snapshot.docs.map(async (docSnap) => {
                 const data = docSnap.data();
-                // Prefer an embedded patientName on the chat document; fall back to patientId
                 let patientName = (data.patientName as string) || data.patientId;
                 try {
-                    // If no embedded name, try to fetch the user doc to get a friendly name
                     if (!data.patientName) {
                         const patientDoc = await getDoc(doc(db, "users", data.patientId));
                         if (patientDoc.exists()) {
@@ -164,14 +244,14 @@ export function listenDoctorChats(doctorId: string, callback: (chats: any[]) => 
                             patientName = pdata.name || pdata.displayName || pdata.email || data.patientId;
                         }
                     }
-                } catch (e) {
+                } catch {
                     // ignore
                 }
+
                 return {
                     id: docSnap.id,
                     ...data,
                     patientName,
-                    // Include role-specific last messages for UI display
                     lastMessageFromPatient: data.lastMessageFromPatient || null,
                     lastMessageFromDoctor: data.lastMessageFromDoctor || null,
                 };
@@ -182,15 +262,11 @@ export function listenDoctorChats(doctorId: string, callback: (chats: any[]) => 
     });
 }
 
-/**
- * List doctors (simple utility). Falls back to all users if none have role === 'doctor'.
- */
 export async function listDoctors() {
     const q = query(collection(db, "users"), where("role", "==", "doctor"));
     let snap = await getDocs(q);
     let docs = snap.docs;
 
-    // Fallback: if no doctors explicitly tagged, return all users
     if (docs.length === 0) {
         snap = await getDocs(collection(db, "users"));
         docs = snap.docs;
@@ -199,11 +275,6 @@ export async function listDoctors() {
     return docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
 }
 
-/**
- * List patients relevant to a doctor. This will prefer patients explicitly assigned to the doctor
- * via fields like `assignedDoctorId`, `doctorId`, or `assignedDoctors` array. If those fields are
- * absent, it returns all patients so the doctor can start chats with them.
- */
 export async function listPatientsForDoctor(doctorId: string) {
     const q = query(collection(db, "users"), where("role", "==", "patient"));
     const snap = await getDocs(q);
@@ -215,151 +286,182 @@ export async function listPatientsForDoctor(doctorId: string) {
         if (p.assignedDoctorId) return p.assignedDoctorId === doctorId;
         if (p.doctorId) return p.doctorId === doctorId;
         if (Array.isArray(p.assignedDoctors)) return p.assignedDoctors.includes(doctorId);
-        // no assignment information — include so chats can be started
         return true;
     });
 }
 
-/**
- * Listen to doctors in real-time. Falls back to all users if none are tagged as doctors.
- */
 export function listenDoctors(callback: (docs: any[]) => void) {
     const q = query(collection(db, "users"), where("role", "==", "doctor"));
 
     try {
-        return onSnapshot(q, async (snapshot) => {
-            try {
-                let docs = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-                if (docs.length === 0) {
-                    // fallback to all users (one-off)
-                    const allSnap = await getDocs(collection(db, "users"));
-                    docs = allSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        return onSnapshot(
+            q,
+            async (snapshot) => {
+                try {
+                    let docs = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+                    if (docs.length === 0) {
+                        const allSnap = await getDocs(collection(db, "users"));
+                        docs = allSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+                    }
+                    callback(docs);
+                } catch (innerErr) {
+                    console.error("listenDoctors processing error:", innerErr);
+                    callback([]);
                 }
-                callback(docs);
-            } catch (innerErr) {
-                console.error("listenDoctors processing error:", innerErr);
+            },
+            (err) => {
+                console.error("listenDoctors onSnapshot error:", err);
+                if ((err as any)?.code === "permission-denied") {
+                    console.warn("listenDoctors: Firestore rules prevented a client read.");
+                }
                 callback([]);
             }
-        }, (err) => {
-            console.error("listenDoctors onSnapshot error:", err);
-            if ((err as any)?.code === 'permission-denied') {
-                console.warn("listenDoctors: Firestore rules prevented a client read; try using server function or adjust rules.");
-            }
-            // call callback with empty array so UI can stop loading
-            callback([]);
-        });
+        );
     } catch (err) {
         console.error("listenDoctors setup error:", err);
         callback([]);
-        return () => { /* noop */ };
+        return () => { };
     }
 }
 
-// Server-backed fetch helpers (use when Firestore rules block direct reads)
-import { auth } from "@/firebase";
-
-// Use the Functions emulator when running locally (so CORS and rapid iteration work).
-const FUNCTIONS_BASE = (typeof window !== "undefined" && window.location.hostname === "localhost")
-    ? `http://localhost:5001/echocare-9c2d8/us-central1`
-    : "https://us-central1-echocare-9c2d8.cloudfunctions.net";
-
+// Uses direct Firestore reads — no Firebase Functions needed (free plan compatible)
 export async function fetchDoctorsViaFunction() {
-    // Try HTTP endpoint with CORS headers set on the function
-    try {
-        const token = await auth.currentUser?.getIdToken();
-        const headers: any = {};
-        if (token) headers.Authorization = `Bearer ${token}`;
-        const res = await fetch(`${FUNCTIONS_BASE}/listDoctorsHttp`, {
-            method: "GET",
-            headers,
-            mode: "cors",
-        });
-        if (!res.ok) throw new Error(`http ${res.status}`);
-        const data = await res.json();
-        return data as any[];
-    } catch (err) {
-        console.warn("fetchDoctorsViaFunction http failed, falling back to callable if signed-in:", err);
-        // If not signed in, skip callable fallback and let caller handle a realtime or other fallback
-        if (!auth.currentUser) {
-            console.warn("No authenticated user; skipping callable fallback.");
-            throw new Error("not-signed-in");
-        }
-        // Fallback to callable if http fails and user is signed-in
-        try {
-            const functions = getFunctions();
-            const fn = httpsCallable(functions, "listDoctors");
-            const result = await fn();
-            return result.data as any[];
-        } catch (callErr) {
-            console.error("callable listDoctors failed:", callErr);
-            throw callErr;
-        }
-    }
+    if (!auth.currentUser) throw new Error("not-signed-in");
+    return listDoctors();
 }
 
 export async function fetchPatientsForDoctorViaFunction(doctorId: string) {
-    try {
-        const token = await auth.currentUser?.getIdToken();
-        const res = await fetch(`${FUNCTIONS_BASE}/listPatientsForDoctorHttp`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify({ doctorId }),
-        });
-        if (!res.ok) throw new Error(`http ${res.status}`);
-        const data = await res.json();
-        return data as any[];
-    } catch (err) {
-        console.warn("fetchPatientsForDoctorViaFunction http failed, falling back to callable:", err);
-        const functions = getFunctions();
-        const fn = httpsCallable(functions, "listPatientsForDoctor");
-        const result = await fn({ doctorId });
-        return result.data as any[];
-    }
+    if (!auth.currentUser) throw new Error("not-signed-in");
+    return listPatientsForDoctor(doctorId);
 }
 
-/**
- * Listen to patients relevant to a doctor in real-time (prefers assigned patients).
- */
 export function listenPatientsForDoctor(doctorId: string, callback: (docs: any[]) => void) {
-    // Query all users (fallback for when roles are missing), then pick patient-like users
     const q = query(collection(db, "users"));
 
     try {
-        return onSnapshot(q, (snapshot) => {
-            try {
-                const all = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        return onSnapshot(
+            q,
+            (snapshot) => {
+                try {
+                    const all = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+                    const isPatientCandidate = (u: any) => (u.role ? u.role === "patient" : true);
 
-                // Consider a user a patient candidate if role === 'patient' OR role missing
-                const isPatientCandidate = (u: any) => (u.role ? u.role === "patient" : true);
+                    const assigned = all.filter((p: any) => {
+                        if (!isPatientCandidate(p)) return false;
+                        if (p.assignedDoctorId) return p.assignedDoctorId === doctorId;
+                        if (p.doctorId) return p.doctorId === doctorId;
+                        if (Array.isArray(p.assignedDoctors)) return p.assignedDoctors.includes(doctorId);
+                        return false;
+                    });
 
-                const assigned = all.filter((p: any) => {
-                    if (!isPatientCandidate(p)) return false;
-                    if (p.assignedDoctorId) return p.assignedDoctorId === doctorId;
-                    if (p.doctorId) return p.doctorId === doctorId;
-                    if (Array.isArray(p.assignedDoctors)) return p.assignedDoctors.includes(doctorId);
-                    return false;
-                });
-
-                // If there are assigned patients, show them; otherwise show all patient candidates
-                const candidates = all.filter(isPatientCandidate);
-                const result = assigned.length > 0 ? assigned : candidates;
-
-                callback(result);
-            } catch (innerErr) {
-                console.error("listenPatientsForDoctor processing error:", innerErr);
+                    const candidates = all.filter(isPatientCandidate);
+                    const result = assigned.length > 0 ? assigned : candidates;
+                    callback(result);
+                } catch (innerErr) {
+                    console.error("listenPatientsForDoctor processing error:", innerErr);
+                    callback([]);
+                }
+            },
+            (err) => {
+                console.error("listenPatientsForDoctor onSnapshot error:", err);
                 callback([]);
             }
-        }, (err) => {
-            console.error("listenPatientsForDoctor onSnapshot error:", err);
-            // notify UI with empty array so loading stops and user can refresh
-            callback([]);
-        });
+        );
     } catch (err) {
         console.error("listenPatientsForDoctor setup error:", err);
         callback([]);
-        return () => { /* noop */ };
+        return () => { };
+    }
+}
+
+export async function deleteChatMessage(chatId: string, messageId: string) {
+    const coll = await findChatCollection(chatId);
+    await deleteDoc(doc(db, coll, chatId, "messages", messageId));
+    await setDoc(
+        doc(db, coll, chatId),
+        {
+            updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+    );
+}
+
+export function listenUsersByRole(role: "patient" | "doctor" | "caregiver" | "admin", callback: (docs: any[]) => void) {
+    const q = query(collection(db, "users"), where("role", "==", role));
+
+    try {
+        return onSnapshot(
+            q,
+            (snapshot) => {
+                const docs = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+                callback(docs);
+            },
+            (err) => {
+                console.error("listenUsersByRole onSnapshot error:", err);
+                callback([]);
+            }
+        );
+    } catch (err) {
+        console.error("listenUsersByRole setup error:", err);
+        callback([]);
+        return () => { };
+    }
+}
+
+export function listenCaregiverPatients(caregiverId: string, callback: (docs: any[]) => void) {
+    const q = query(collection(db, "users"), where("role", "==", "patient"));
+
+    try {
+        return onSnapshot(
+            q,
+            (snapshot) => {
+                const allPatients = snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+                const linked = allPatients.filter((p: any) => {
+                    if (p.assignedCaregiverId) return p.assignedCaregiverId === caregiverId;
+                    if (p.caregiverId) return p.caregiverId === caregiverId;
+                    if (Array.isArray(p.assignedCaregivers)) return p.assignedCaregivers.includes(caregiverId);
+                    return true;
+                });
+
+                callback(linked);
+            },
+            (err) => {
+                console.error("listenCaregiverPatients onSnapshot error:", err);
+                callback([]);
+            }
+        );
+    } catch (err) {
+        console.error("listenCaregiverPatients setup error:", err);
+        callback([]);
+        return () => { };
+    }
+}
+
+export function listenChatsByParticipant(userId: string, callback: (chats: any[]) => void) {
+    const q = query(collection(db, "chats"), where("participants", "array-contains", userId));
+
+    try {
+        return onSnapshot(
+            q,
+            (snapshot) => {
+                const chats = snapshot.docs
+                    .map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))
+                    .sort((a: any, b: any) => {
+                        const aSec = a.updatedAt?.seconds || 0;
+                        const bSec = b.updatedAt?.seconds || 0;
+                        return bSec - aSec;
+                    });
+                callback(chats);
+            },
+            (err) => {
+                console.error("listenChatsByParticipant onSnapshot error:", err);
+                callback([]);
+            }
+        );
+    } catch (err) {
+        console.error("listenChatsByParticipant setup error:", err);
+        callback([]);
+        return () => { };
     }
 }
