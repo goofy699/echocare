@@ -149,6 +149,8 @@ export default function VerifyOtp() {
 
             toast.success("Account created and verified!");
 
+            sessionStorage.setItem("echocare_logged_in", "1");
+
             // 4) cleanup + redirect
             localStorage.removeItem(PENDING_SIGNUP_KEY);
 

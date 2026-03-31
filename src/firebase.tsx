@@ -1,5 +1,5 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, inMemoryPersistence, setPersistence } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { connectFunctionsEmulator, getFunctions } from "firebase/functions";
 import { getStorage } from "firebase/storage";
@@ -23,6 +23,9 @@ if (import.meta.env.VITE_USE_FUNCTIONS_EMULATOR === "true") {
 
 // Export Firebase services
 export const auth = getAuth(app);
+void setPersistence(auth, inMemoryPersistence).catch((error) => {
+    console.error("Failed to set auth persistence:", error);
+});
 export const db = getFirestore(app);
 export const storage = getStorage(app, "gs://echocare-9c2d8.appspot.com");
 export { app, functions };

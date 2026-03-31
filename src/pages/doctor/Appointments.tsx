@@ -118,7 +118,7 @@ export default function DoctorAppointments() {
                         <BarChart3 className="w-4 h-4" />
                         Analytics
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/profile")}>
+                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
                         <Settings className="w-4 h-4" />
                         Settings
                     </Button>

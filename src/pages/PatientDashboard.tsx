@@ -1,9 +1,12 @@
 import { useNavigate, Outlet, useLocation } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
-import { auth } from "@/firebase";
+import { useEffect, useMemo, useState } from "react";
+import { auth, db } from "@/firebase";
+import { doc, onSnapshot } from "firebase/firestore";
+import { format, isSameDay, startOfDay, subDays } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Logo } from "@/components/Logo";
 import {
   Home,
@@ -11,16 +14,22 @@ import {
   Calendar,
   Bell,
   FileText,
+  NotebookPen,
   LifeBuoy,
   ThumbsUp,
   Pill,
   Menu,
   MessagesSquare,
-  Bot,
-  X,
-  Paperclip,
+  Brain,
+  Settings,
+  LogOut,
+  UserCircle2,
 } from "lucide-react";
-import { createChat, listenDoctors, listenToMessages, sendMessage, uploadChatAttachment } from "@/services/chat";
+import { listenDoctors, createChat, sendMessage } from "@/services/chat";
+import { createPatientNote } from "@/services/notes";
+import { listenRemindersByPatient, ReminderRecord } from "@/services/reminders";
+import { AppointmentRecord, listenAppointmentsByPatient } from "@/services/appointments";
+import { createSosAlert } from "@/services/sos";
 import {
   Sheet,
   SheetContent,
@@ -29,6 +38,8 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useReminderNotifications } from "@/hooks/useReminderNotifications";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
 
 export default function PatientDashboard() {
   useReminderNotifications();
@@ -36,18 +47,99 @@ export default function PatientDashboard() {
   const navigate = useNavigate();
   const location = useLocation();
   const user = auth.currentUser;
+  const [welcomeName, setWelcomeName] = useState(user?.displayName || user?.email || "Patient");
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState(user?.photoURL || "");
+  const [patientProfile, setPatientProfile] = useState<any | null>(null);
   const [doctors, setDoctors] = useState<any[]>([]);
   const [selectedDoctor, setSelectedDoctor] = useState<any | null>(null);
-  const [showMiniChat, setShowMiniChat] = useState(false);
-  const [showAiDummy, setShowAiDummy] = useState(false);
-  const [miniMessages, setMiniMessages] = useState<any[]>([]);
-  const [miniMessage, setMiniMessage] = useState("");
-  const [miniSending, setMiniSending] = useState(false);
-  const [miniSelectedFile, setMiniSelectedFile] = useState<File | null>(null);
-  const miniFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [showQuickNote, setShowQuickNote] = useState(false);
+  const [showReminderPopup, setShowReminderPopup] = useState(false);
+  const [reminders, setReminders] = useState<ReminderRecord[]>([]);
+  const [upcomingAppointments, setUpcomingAppointments] = useState<AppointmentRecord[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(true);
+  const graceMs = 5 * 60 * 1000; // five-minute grace window
+  const [quickNoteTitle, setQuickNoteTitle] = useState("");
+  const [quickNoteContent, setQuickNoteContent] = useState("");
+  const [savingQuickNote, setSavingQuickNote] = useState(false);
+  const [sendingSos, setSendingSos] = useState(false);
+
+  const initials = (value?: string) => {
+    const text = (value || "").trim();
+    if (!text) return "D";
+    const parts = text.split(/\s+/).slice(0, 2);
+    return parts.map((p) => p[0]?.toUpperCase() || "").join("") || "D";
+  };
+
+  const caregiverId = patientProfile?.assignedCaregiverId || patientProfile?.caregiverId || null;
+
+  const sendSos = async () => {
+    if (!user?.uid) {
+      toast.error("Please sign in first.");
+      return;
+    }
+    if (!caregiverId) {
+      toast.error("No caregiver assigned. Contact admin to link a caregiver.");
+      return;
+    }
+    if (!navigator.geolocation) {
+      toast.error("Location is not supported in this browser.");
+      return;
+    }
+
+    setSendingSos(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const mapsLink = `https://maps.google.com/?q=${lat},${lng}`;
+          const patientName = welcomeName;
+
+          await createSosAlert({
+            patientId: user.uid,
+            patientName,
+            caregiverId,
+            lat,
+            lng,
+            source: "dashboard",
+          });
+
+          const chatId = [user.uid, caregiverId].sort().join("_");
+          await createChat(chatId, user.uid, caregiverId, patientName);
+          await sendMessage(chatId, user.uid, `SOS: ${patientName} needs help. Location: ${mapsLink}`);
+
+          toast.success("SOS sent to your caregiver.");
+        } catch (error) {
+          console.error("sos send failed", error);
+          toast.error("Could not send SOS. Please try again.");
+        } finally {
+          setSendingSos(false);
+        }
+      },
+      (err) => {
+        console.error("geolocation error", err);
+        toast.error("Location access denied. Enable location and try again.");
+        setSendingSos(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   const isReportMessage = (text?: string) =>
     typeof text === "string" && text.trim().startsWith("[REPORT]");
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubscribe = onSnapshot(doc(db, "users", user.uid), (snap) => {
+      const data = snap.data() as any;
+      setWelcomeName(data?.name || data?.displayName || user.displayName || user.email || "Patient");
+      setProfilePhotoUrl(data?.photoURL || data?.photoUrl || user.photoURL || "");
+      setPatientProfile(data || null);
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid, user?.displayName, user?.email]);
 
   useEffect(() => {
     const unsubscribe = listenDoctors((list) => {
@@ -56,6 +148,8 @@ export default function PatientDashboard() {
         name: d.name || d.displayName || d.email || "Doctor",
         specialization: d.specialization || "General Medicine",
         phone: d.phone || "",
+        email: d.email || "",
+        photoURL: d.photoURL || "",
         qualification: d.qualification || "",
         hospital: d.hospital || "",
         bio: d.bio || "",
@@ -71,6 +165,61 @@ export default function PatientDashboard() {
     return () => unsubscribe && unsubscribe();
   }, [selectedDoctor]);
 
+  useEffect(() => {
+    if (!user?.uid) return;
+    const un = listenRemindersByPatient(user.uid, setReminders);
+    return () => un();
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setAppointmentsLoading(false);
+      return;
+    }
+
+    const unsubscribe = listenAppointmentsByPatient(user.uid, (list) => {
+      const now = new Date();
+      const upcoming = list
+        .filter((item) => item.scheduledAt.getTime() >= now.getTime())
+        .slice(0, 3);
+      setUpcomingAppointments(upcoming);
+      setAppointmentsLoading(false);
+    });
+
+    return () => unsubscribe?.();
+  }, [user?.uid]);
+
+  const medicationAdherence = useMemo(() => {
+    const today = startOfDay(new Date());
+    const days = Array.from({ length: 7 }).map((_, idx) => {
+      const dayDate = subDays(today, 6 - idx);
+      const meds = reminders.filter(
+        (r) => r.type === "medication" && isSameDay(startOfDay(r.dueAt), dayDate),
+      );
+
+      if (meds.length === 0) {
+        return { label: format(dayDate, "EEE"), status: "none" as const, items: [] as ReminderRecord[] };
+      }
+
+      const now = new Date();
+      const pastDueWithoutGrace = meds.filter(
+        (r) => r.status === "pending" && now.getTime() - r.dueAt.getTime() > graceMs,
+      );
+      const completed = meds.filter((r) => r.status === "completed");
+      const status = (() => {
+        if (completed.length === meds.length) return "taken" as const;
+        if (completed.length > 0 && pastDueWithoutGrace.length === 0) return "partial" as const;
+        if (completed.length > 0 && pastDueWithoutGrace.length > 0) return "partial" as const;
+        if (pastDueWithoutGrace.length === meds.length) return "missed" as const;
+        return "partial" as const;
+      })();
+
+      return { label: format(dayDate, "EEE"), status, items: meds };
+    });
+
+    return days;
+  }, [graceMs, reminders]);
+
   const goToBooking = (doctorId?: string) => {
     if (doctorId) {
       localStorage.setItem("patient_selected_doctor_id", doctorId);
@@ -85,93 +234,29 @@ export default function PatientDashboard() {
     navigate("/patient/messages");
   };
 
-  const miniChatDoctor = selectedDoctor || doctors[0] || null;
-  const miniChatId = user?.uid && miniChatDoctor?.id
-    ? [user.uid, miniChatDoctor.id].sort().join("_")
-    : "";
-
-  useEffect(() => {
-    if (!showMiniChat || !miniChatId || !user || !miniChatDoctor) return;
-
-    createChat(
-      miniChatId,
-      user.uid,
-      miniChatDoctor.id,
-      user.displayName || user.email || user.uid
-    );
-
-    const unsubscribe = listenToMessages(miniChatId, (msgs) => {
-      setMiniMessages((msgs || []).filter((m: any) => !isReportMessage(m?.text)));
-    });
-    return () => unsubscribe();
-  }, [showMiniChat, miniChatId, miniChatDoctor, user]);
-
-  const downloadAttachment = async (attachment: any) => {
-    const fileName = attachment?.name || "document.pdf";
-    try {
-      if (attachment?.dataBase64) {
-        const link = document.createElement("a");
-        link.href = String(attachment.dataBase64);
-        link.download = fileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        return;
-      }
-
-      const url = String(attachment?.url || "");
-      if (!url) throw new Error("No attachment URL");
-
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`download failed: ${response.status}`);
-      const blob = await response.blob();
-      const objectUrl = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(objectUrl);
-    } catch (error) {
-      console.error("mini attachment download failed:", error);
-    }
-  };
-
-  const onMiniFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] || null;
-    if (!file) return;
-
-    const lowerName = file.name.toLowerCase();
-    const isImage = file.type.startsWith("image/");
-    const isPdf = file.type === "application/pdf" || lowerName.endsWith(".pdf");
-
-    if (!isImage && !isPdf) {
-      event.target.value = "";
+  const handleSaveQuickNote = async () => {
+    if (!user?.uid) return;
+    if (!quickNoteContent.trim()) {
+      toast.error("Please write your note first.");
       return;
     }
 
-    miniFileInputRef.current && (miniFileInputRef.current.value = "");
-    setMiniSelectedFile(file);
-  };
-
-  const sendMiniMessage = async () => {
-    if ((!miniMessage.trim() && !miniSelectedFile) || !user || !miniChatId) return;
     try {
-      setMiniSending(true);
-      let attachment;
-      if (miniSelectedFile) {
-        attachment = await uploadChatAttachment(miniChatId, user.uid, miniSelectedFile);
-      }
-
-      await sendMessage(miniChatId, user.uid, miniMessage, attachment);
-      setMiniMessage("");
-      setMiniSelectedFile(null);
-      if (miniFileInputRef.current) miniFileInputRef.current.value = "";
+      setSavingQuickNote(true);
+      await createPatientNote({
+        patientId: user.uid,
+        title: quickNoteTitle,
+        content: quickNoteContent,
+      });
+      setQuickNoteTitle("");
+      setQuickNoteContent("");
+      setShowQuickNote(false);
+      toast.success("Note saved.");
     } catch (error) {
-      console.error("mini chat send failed:", error);
+      console.error("quick note save failed:", error);
+      toast.error("Could not save note.");
     } finally {
-      setMiniSending(false);
+      setSavingQuickNote(false);
     }
   };
 
@@ -179,70 +264,111 @@ export default function PatientDashboard() {
     <nav className="space-y-2">
       <Button
         variant="secondary"
-        className="w-full justify-start gap-3"
+        className="sidebar-item w-full justify-start gap-3"
         onClick={() => navigate("/patient")}
       >
         <Home className="w-4 h-4" />
-        Home
+        <span className="sidebar-label">Home</span>
       </Button>
 
-      {/* ✅ NEW MESSAGES BUTTON */}
       <Button
         variant="ghost"
-        className="w-full justify-start gap-3"
+        className="sidebar-item w-full justify-start gap-3"
         onClick={() => navigate("/patient/messages")}
       >
         <MessagesSquare className="w-4 h-4" />
-        Messages
+        <span className="sidebar-label">Messages</span>
       </Button>
 
       <Button
         variant="ghost"
-        className="w-full justify-start gap-3"
+        className="sidebar-item w-full justify-start gap-3"
         onClick={() => navigate("/patient/chatbot")}
       >
         <MessageSquare className="w-4 h-4" />
-        Chatbot
+        <span className="sidebar-label">Chatbot</span>
       </Button>
 
       <Button
         variant="ghost"
-        className="w-full justify-start gap-3"
+        className="sidebar-item w-full justify-start gap-3"
         onClick={() => navigate("/patient/appointments")}
       >
         <Calendar className="w-4 h-4" />
-        Appointments
+        <span className="sidebar-label">Appointments</span>
       </Button>
 
       <Button
         variant="ghost"
-        className="w-full justify-start gap-3"
+        className="sidebar-item w-full justify-start gap-3"
         onClick={() => navigate("/patient/reminders")}
       >
         <Bell className="w-4 h-4" />
-        Reminders
+        <span className="sidebar-label">Reminders</span>
       </Button>
 
       <Button
         variant="ghost"
-        className="w-full justify-start gap-3"
+        className="sidebar-item w-full justify-start gap-3"
         onClick={() => navigate("/patient/reports")}
       >
         <FileText className="w-4 h-4" />
-        Reports
+        <span className="sidebar-label">Reports</span>
       </Button>
 
       <Button
         variant="ghost"
-        className="w-full justify-start gap-3 text-destructive"
+        className="sidebar-item w-full justify-start gap-3"
+        onClick={() => navigate("/patient/notes")}
       >
-        <LifeBuoy className="w-4 h-4" />
-        SOS
+        <NotebookPen className="w-4 h-4" />
+        <span className="sidebar-label">Notes</span>
       </Button>
 
-      <Button variant="ghost" className="w-full justify-start gap-3">
+      <Button
+        variant="ghost"
+        className="sidebar-item w-full justify-start gap-3"
+        onClick={() => navigate("/patient/games")}
+      >
+        <Brain className="w-4 h-4" />
+        <span className="sidebar-label">Games</span>
+      </Button>
+
+      <Button
+        variant="ghost"
+        className="sidebar-item w-full justify-start gap-3"
+        onClick={() => navigate("/patient/settings")}
+      >
+        <Settings className="w-4 h-4" />
+        <span className="sidebar-label">Settings</span>
+      </Button>
+
+      <Button
+        variant="ghost"
+        className="sidebar-item w-full justify-start gap-3 text-destructive"
+        onClick={sendSos}
+        disabled={sendingSos}
+      >
+        <LifeBuoy className="w-4 h-4" />
+        <span className="sidebar-label">{sendingSos ? "Sending..." : "SOS"}</span>
+      </Button>
+
+      <Button variant="ghost" className="sidebar-item w-full justify-start gap-3">
         <ThumbsUp className="w-4 h-4" />
-        Feedback
+        <span className="sidebar-label">Feedback</span>
+      </Button>
+
+      <Button
+        variant="outline"
+        className="sidebar-item w-full justify-start gap-3"
+        onClick={async () => {
+          sessionStorage.removeItem("echocare_logged_in");
+          await auth.signOut();
+          navigate("/auth", { replace: true });
+        }}
+      >
+        <LogOut className="w-4 h-4" />
+        <span className="sidebar-label">Logout</span>
       </Button>
     </nav>
   );
@@ -283,13 +409,23 @@ export default function PatientDashboard() {
         </header>
 
         {/* PAGE CONTENT */}
-        <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6 lg:p-8 pb-24">
+        <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-5 lg:p-6 pb-12">
           <div className="max-w-7xl mx-auto">
             {location.pathname === "/patient" ? (
               <>
                 <div className="mb-8">
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-full overflow-hidden bg-muted flex items-center justify-center">
+                      {profilePhotoUrl ? (
+                        <img src={profilePhotoUrl} alt="profile" className="w-full h-full object-cover" />
+                      ) : (
+                        <UserCircle2 className="w-8 h-8 text-muted-foreground" />
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground">Your account profile</p>
+                  </div>
                   <h1 className="text-2xl sm:text-3xl font-bold mb-2">
-                    Welcome Back, Jane!
+                    Welcome Back, {welcomeName}!
                   </h1>
                   <h2 className="text-xl sm:text-2xl font-semibold mb-6">
                     Today&apos;s Health Overview
@@ -300,15 +436,80 @@ export default function PatientDashboard() {
                       <Calendar className="w-4 h-4" />
                       Book Appointment
                     </Button>
-                    <Button variant="outline" className="gap-2">
+                    <Button variant="outline" className="gap-2" onClick={() => setShowQuickNote((prev) => !prev)}>
                       <FileText className="w-4 h-4" />
                       Add Note
                     </Button>
-                    <Button variant="outline" className="gap-2">
+                    <Button variant="outline" className="gap-2" onClick={() => setShowReminderPopup((prev) => !prev)}>
                       <Bell className="w-4 h-4" />
                       Check Reminders
                     </Button>
                   </div>
+
+                  {showReminderPopup && (
+                    <Card className="mt-4">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-2">
+                            <Bell className="w-4 h-4" />
+                            Reminder Notifications
+                          </span>
+                          <Button size="sm" variant="outline" onClick={() => navigate("/patient/reminders")}>
+                            Add Reminder
+                          </Button>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        {reminders.filter((r) => r.status === "pending").length === 0 ? (
+                          <p className="text-sm text-muted-foreground">No pending reminders.</p>
+                        ) : (
+                          reminders
+                            .filter((r) => r.status === "pending")
+                            .slice(0, 6)
+                            .map((item) => (
+                              <div key={item.id} className="rounded-md border p-3">
+                                <p className="font-medium text-sm">{item.title}</p>
+                                <p className="text-xs text-muted-foreground mt-1">{item.description || "No description"}</p>
+                                <p className="text-xs mt-1">Due: {item.dueAt.toLocaleString()}</p>
+                              </div>
+                            ))
+                        )}
+                        <div className="flex justify-end">
+                          <Button variant="ghost" size="sm" onClick={() => setShowReminderPopup(false)}>
+                            Close
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {showQuickNote && (
+                    <Card className="mt-4">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base">Quick Note</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <Input
+                          value={quickNoteTitle}
+                          onChange={(e) => setQuickNoteTitle(e.target.value)}
+                          placeholder="Title (optional)"
+                        />
+                        <Textarea
+                          value={quickNoteContent}
+                          onChange={(e) => setQuickNoteContent(e.target.value)}
+                          placeholder="Write your note..."
+                          className="min-h-24"
+                        />
+                        <div className="flex gap-2">
+                          <Button onClick={handleSaveQuickNote} disabled={savingQuickNote || !quickNoteContent.trim()}>
+                            {savingQuickNote ? "Saving..." : "Save Note"}
+                          </Button>
+                          <Button variant="outline" onClick={() => setShowQuickNote(false)}>Cancel</Button>
+                          <Button variant="ghost" onClick={() => navigate("/patient/notes")}>Open Full Notes</Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 gap-6 mb-8">
@@ -324,7 +525,7 @@ export default function PatientDashboard() {
                     <CardContent>
                       <div className="text-3xl font-bold text-success">Taken</div>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Today’s medication completed
+                        Today's medication completed
                       </p>
                     </CardContent>
                   </Card>
@@ -399,55 +600,68 @@ export default function PatientDashboard() {
                   </Card>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Weekly Health Trends</CardTitle>
-                      <p className="text-sm text-muted-foreground">
-                        Blood Pressure (Systolic)
-                      </p>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="h-64 bg-muted/30 rounded-lg flex items-center justify-center">
-                        <p className="text-muted-foreground text-sm">
-                          Health trend visualization will appear here
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <Card>
                     <CardHeader>
                       <CardTitle>Upcoming Appointments</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      <div className="p-4 border rounded-lg">
-                        <h4 className="font-semibold">Dr. Evelyn Reed</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Cardiology • 28 Oct • 10:30 AM
-                        </p>
-                      </div>
-                      <div className="p-4 border rounded-lg">
-                        <h4 className="font-semibold">Dr. Ben Carter</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Dermatology • 05 Nov • 02:00 PM
-                        </p>
-                      </div>
+                      {appointmentsLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading appointments...</p>
+                      ) : upcomingAppointments.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No upcoming appointments.</p>
+                      ) : (
+                        upcomingAppointments.map((appt) => (
+                          <div key={appt.id} className="p-4 border rounded-lg">
+                            <h4 className="font-semibold">{appt.doctorName || "Doctor"}</h4>
+                            <p className="text-sm text-muted-foreground">
+                              {format(appt.scheduledAt, "MMM d, h:mm a")}
+                              {appt.location ? ` - ${appt.location}` : ""}
+                            </p>
+                          </div>
+                        ))
+                      )}
                     </CardContent>
                   </Card>
 
                   <Card>
                     <CardHeader>
                       <CardTitle>Medication Adherence</CardTitle>
-                      <p className="text-sm text-muted-foreground">
-                        Last 7 days
-                      </p>
+                      <p className="text-sm text-muted-foreground">Last 7 days</p>
                     </CardHeader>
-                    <CardContent>
-                      <div className="h-64 bg-muted/30 rounded-lg flex items-center justify-center">
-                        <p className="text-muted-foreground text-sm">
-                          Medication adherence visualization will appear here
-                        </p>
+                    <CardContent className="space-y-3">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+                        {medicationAdherence.map((day) => {
+                          const color =
+                            day.status === "taken"
+                              ? "bg-green-500/10 text-green-700 border-green-500/30"
+                              : day.status === "missed"
+                                ? "bg-red-500/10 text-red-700 border-red-500/30"
+                                : day.status === "partial"
+                                  ? "bg-amber-500/10 text-amber-700 border-amber-500/30"
+                                  : "bg-muted text-muted-foreground border-muted";
+                          const label = day.status === "taken" ? "Taken" : day.status === "missed" ? "Missed" : day.status === "partial" ? "Partial" : "No meds";
+                          return (
+                            <div key={day.label} className={`rounded-lg border p-3 space-y-1 ${color}`}>
+                              <p className="text-xs font-semibold">{day.label}</p>
+                              <p className="text-xs">{label}</p>
+                              {day.items.slice(0, 2).map((med) => (
+                                <p key={med.id} className="text-[11px] truncate font-medium text-foreground">
+                                  {med.title}
+                                </p>
+                              ))}
+                              {day.items.length > 2 && (
+                                <p className="text-[11px] text-muted-foreground">+{day.items.length - 2} more</p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Taken</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-amber-500"></span> Partial</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-red-500"></span> Missed</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-muted"></span> No meds</span>
                       </div>
                     </CardContent>
                   </Card>
@@ -459,158 +673,6 @@ export default function PatientDashboard() {
           </div>
         </main>
       </div>
-
-      <div className="fixed bottom-6 right-6 flex flex-col gap-3 z-50">
-        <Button
-          className="w-12 h-12 rounded-full shadow-lg bg-accent"
-          onClick={() => {
-            setShowAiDummy(false);
-            setShowMiniChat((prev) => !prev);
-          }}
-        >
-          <MessageSquare className="w-6 h-6" />
-        </Button>
-        <Button
-          variant="outline"
-          className="w-12 h-12 rounded-full shadow-lg bg-white"
-          onClick={() => {
-            setShowMiniChat(false);
-            setShowAiDummy((prev) => !prev);
-          }}
-        >
-          <Bot className="w-6 h-6" />
-        </Button>
-      </div>
-
-      {showMiniChat && (
-        <div className="fixed bottom-24 right-6 w-[min(92vw,360px)] z-50">
-          <Card className="shadow-large border-2">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-base">Quick Chat</CardTitle>
-                  <p className="text-xs text-muted-foreground">
-                    {miniChatDoctor ? `with ${miniChatDoctor.name}` : "No doctor selected"}
-                  </p>
-                </div>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowMiniChat(false)}>
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="h-52 overflow-y-auto space-y-2 rounded-md border p-2 bg-muted/20">
-                {miniMessages.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">Start a quick conversation with your doctor.</p>
-                ) : (
-                  miniMessages.map((m) => (
-                    <div
-                      key={m.id}
-                      className={`max-w-[82%] p-2 rounded-md text-xs ${m.senderId === user?.uid ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
-                    >
-                      {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
-                      {m.attachment && (
-                        <div className={m.text ? "mt-2" : ""}>
-                          {m.attachment.kind === "image" ? (
-                            <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
-                              <img
-                                src={m.attachment.url}
-                                alt={m.attachment.name || "attachment"}
-                                className="max-h-28 rounded border"
-                              />
-                            </a>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => downloadAttachment(m.attachment)}
-                              className="underline underline-offset-2"
-                            >
-                              {m.attachment.name || "PDF file"}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {miniSelectedFile && (
-                <div className="rounded-md border px-2 py-1.5 text-xs flex items-center justify-between gap-2">
-                  <span className="truncate">{miniSelectedFile.name}</span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={() => {
-                      setMiniSelectedFile(null);
-                      if (miniFileInputRef.current) miniFileInputRef.current.value = "";
-                    }}
-                  >
-                    <X className="w-3 h-3" />
-                  </Button>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <input
-                  ref={miniFileInputRef}
-                  type="file"
-                  accept="image/*,.pdf,application/pdf"
-                  className="hidden"
-                  onChange={onMiniFileChange}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  onClick={() => miniFileInputRef.current?.click()}
-                  disabled={!miniChatDoctor || miniSending}
-                >
-                  <Paperclip className="w-4 h-4" />
-                </Button>
-                <Input
-                  placeholder="Type message..."
-                  value={miniMessage}
-                  onChange={(e) => setMiniMessage(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMiniMessage()}
-                  disabled={!miniChatDoctor || miniSending}
-                />
-                <Button onClick={sendMiniMessage} disabled={(!miniMessage.trim() && !miniSelectedFile) || !miniChatDoctor || miniSending}>
-                  Send
-                </Button>
-              </div>
-
-              <Button variant="ghost" className="w-full" onClick={() => goToChat(miniChatDoctor?.id)}>
-                Open Full Chat
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {showAiDummy && (
-        <div className="fixed bottom-24 right-6 w-[min(92vw,340px)] z-50">
-          <Card className="shadow-large border-2">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Bot className="w-4 h-4" />
-                  AI Assistant
-                </CardTitle>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setShowAiDummy(false)}>
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                AI chatbot integration is coming soon. This button is active and ready for your future AI service.
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }

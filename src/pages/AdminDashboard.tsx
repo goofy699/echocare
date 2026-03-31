@@ -1,17 +1,41 @@
+import { useEffect, useState } from "react";
+import { doc, onSnapshot } from "firebase/firestore";
+import { auth, db } from "@/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Logo } from "@/components/Logo";
 import { LayoutDashboard, Users, Calendar, FileText, ScrollText, Settings, HelpCircle, Search, Bell, TrendingUp, AlertCircle, CheckCircle, Clock } from "lucide-react";
+import { listenSosAlertsForAdmin, SosAlert } from "@/services/sos";
 
 export default function AdminDashboard() {
+  const user = auth.currentUser;
+  const [adminName, setAdminName] = useState(user?.displayName || user?.email || "Admin");
+  const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    const unsubscribe = onSnapshot(doc(db, "users", user.uid), (snap) => {
+      const data = snap.data() as any;
+      setAdminName(data?.name || data?.displayName || user.displayName || user.email || "Admin");
+    });
+
+    return () => unsubscribe();
+  }, [user?.uid, user?.displayName, user?.email]);
+
+  useEffect(() => {
+    const unsub = listenSosAlertsForAdmin(setSosAlerts);
+    return () => unsub && unsub();
+  }, []);
+
   return (
     <div className="min-h-screen bg-background flex">
       {/* Sidebar */}
       <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
         <Logo className="mb-8" />
-        
+
         <nav className="space-y-2">
           <Button variant="secondary" className="w-full justify-start gap-3">
             <LayoutDashboard className="w-4 h-4" />
@@ -67,7 +91,7 @@ export default function AdminDashboard() {
               <div className="flex items-center gap-2">
                 <div className="w-10 h-10 rounded-full bg-gradient-primary"></div>
                 <div className="text-right hidden sm:block">
-                  <p className="text-sm font-medium">Dr. Admin</p>
+                  <p className="text-sm font-medium">{adminName}</p>
                   <p className="text-xs text-muted-foreground">Administrator</p>
                 </div>
               </div>
@@ -78,7 +102,7 @@ export default function AdminDashboard() {
         <div className="p-6 lg:p-8">
           <div className="mb-8">
             <h1 className="text-3xl font-bold mb-2">System Overview</h1>
-            <p className="text-muted-foreground">Welcome back, Admin. Here's a real-time overview of the system.</p>
+            <p className="text-muted-foreground">Welcome back, {adminName}. Here's a real-time overview of the system.</p>
           </div>
 
           <Button className="mb-8">
@@ -140,6 +164,40 @@ export default function AdminDashboard() {
               </CardContent>
             </Card>
           </div>
+
+          <Card className="mb-8">
+            <CardHeader>
+              <CardTitle>Live SOS Alerts</CardTitle>
+              <p className="text-sm text-muted-foreground">Patient location shares sent to caregivers.</p>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {sosAlerts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No SOS alerts received yet.</p>
+              ) : (
+                sosAlerts.slice(0, 5).map((alert) => (
+                  <div key={alert.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+                    <div>
+                      <p className="font-medium">{alert.patientName || alert.patientId}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {Number(alert.lat || 0).toFixed(4)}, {Number(alert.lng || 0).toFixed(4)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs">{alert.status || "active"}</Badge>
+                      <a
+                        href={`https://maps.google.com/?q=${alert.lat},${alert.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm text-primary hover:underline"
+                      >
+                        View Map
+                      </a>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
 
           {/* Manage Users */}
           <Card className="mb-8">

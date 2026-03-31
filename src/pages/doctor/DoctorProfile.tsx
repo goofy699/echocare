@@ -3,14 +3,53 @@ import { useNavigate } from "react-router-dom";
 import { auth, db } from "@/firebase";
 import { updateProfile } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import { Logo } from "@/components/Logo";
-import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, FileText } from "lucide-react";
+import { Camera, LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, FileText, UserCircle2 } from "lucide-react";
+
+async function uploadProfileImageToCloudinary(userId: string, file: File): Promise<string> {
+    if (!file.type.startsWith("image/")) {
+        throw new Error("Only image files are allowed for profile picture.");
+    }
+
+    const maxImageBytes = 8 * 1024 * 1024;
+    if (file.size > maxImageBytes) {
+        throw new Error("Image too large. Max size is 8MB.");
+    }
+
+    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+    const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+
+    if (!cloudName || !uploadPreset) {
+        throw new Error("Cloudinary env is missing. Set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET.");
+    }
+
+    const endpoint = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("upload_preset", uploadPreset);
+    formData.append("folder", `profilePictures/${userId}`);
+
+    const response = await fetch(endpoint, {
+        method: "POST",
+        body: formData,
+    });
+
+    const payload = await response.json();
+    if (!response.ok) {
+        throw new Error(payload?.error?.message || "Profile image upload failed.");
+    }
+
+    return String(payload.secure_url || "");
+}
 
 interface DoctorProfileForm {
     name: string;
@@ -32,11 +71,17 @@ const DEFAULT_FORM: DoctorProfileForm = {
 
 export default function DoctorProfile() {
     const navigate = useNavigate();
+    const { theme, setTheme } = useTheme();
     const doctorId = auth.currentUser?.uid;
     const [form, setForm] = useState<DoctorProfileForm>(DEFAULT_FORM);
     const [email, setEmail] = useState("");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const [photoUrl, setPhotoUrl] = useState("");
+    const [uploadingPhoto, setUploadingPhoto] = useState(false);
+    const [emailNotifications, setEmailNotifications] = useState(true);
+    const [pushNotifications, setPushNotifications] = useState(true);
+    const [shareData, setShareData] = useState(true);
 
     useEffect(() => {
         const user = auth.currentUser;
@@ -62,6 +107,11 @@ export default function DoctorProfile() {
                     hospital: data.hospital || "",
                     bio: data.bio || "",
                 });
+                setPhotoUrl(data.photoURL || data.photoUrl || user.photoURL || "");
+                setEmailNotifications(data.settings?.emailNotifications ?? true);
+                setPushNotifications(data.settings?.pushNotifications ?? true);
+                setShareData(data.settings?.shareData ?? true);
+                if (data.settings?.theme) setTheme(data.settings.theme);
             } catch (error) {
                 console.error("Failed to load doctor profile:", error);
                 toast.error("Could not load profile details.");
@@ -73,10 +123,28 @@ export default function DoctorProfile() {
         return () => {
             mounted = false;
         };
-    }, [navigate]);
+    }, [navigate, setTheme]);
 
     const updateField = (key: keyof DoctorProfileForm, value: string) => {
         setForm((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const onPhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0] || null;
+        if (!file || !doctorId) return;
+
+        try {
+            setUploadingPhoto(true);
+            const uploadedUrl = await uploadProfileImageToCloudinary(doctorId, file);
+            setPhotoUrl(uploadedUrl);
+            toast.success("Profile picture uploaded.");
+        } catch (error: any) {
+            console.error("doctor photo upload failed", error);
+            toast.error(error?.message || "Profile picture upload failed.");
+        } finally {
+            setUploadingPhoto(false);
+            event.target.value = "";
+        }
     };
 
     const handleSave = async () => {
@@ -90,7 +158,10 @@ export default function DoctorProfile() {
 
         setSaving(true);
         try {
-            await updateProfile(user, { displayName: form.name.trim() });
+            await updateProfile(user, {
+                displayName: form.name.trim(),
+                ...(photoUrl ? { photoURL: photoUrl } : {}),
+            });
             await setDoc(
                 doc(db, "users", doctorId),
                 {
@@ -101,7 +172,14 @@ export default function DoctorProfile() {
                     qualification: form.qualification.trim(),
                     hospital: form.hospital.trim(),
                     bio: form.bio.trim(),
+                    photoURL: photoUrl || null,
                     role: "doctor",
+                    settings: {
+                        emailNotifications,
+                        pushNotifications,
+                        shareData,
+                        theme: theme || "system",
+                    },
                     updatedAt: serverTimestamp(),
                 },
                 { merge: true }
@@ -118,35 +196,35 @@ export default function DoctorProfile() {
     return (
         <div className="min-h-screen bg-background flex">
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
-                <Logo className="mb-8" />
-                <nav className="space-y-2">
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
-                        <LayoutDashboard className="w-4 h-4" />
-                        Dashboard
+                    <Logo className="mb-8" />
+                    <nav className="space-y-2">
+                        <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
+                            <LayoutDashboard className="w-4 h-4" />
+                            <span className="sidebar-label">Dashboard</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
-                        <Users className="w-4 h-4" />
-                        Patients
+                        <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
+                            <Users className="w-4 h-4" />
+                            <span className="sidebar-label">Patients</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
-                        <CalendarIcon className="w-4 h-4" />
-                        Appointments
+                        <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
+                            <CalendarIcon className="w-4 h-4" />
+                            <span className="sidebar-label">Appointments</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
-                        <MessageSquare className="w-4 h-4" />
-                        Messages
+                        <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+                            <MessageSquare className="w-4 h-4" />
+                            <span className="sidebar-label">Messages</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
-                        <FileText className="w-4 h-4" />
-                        Reports
+                        <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
+                            <FileText className="w-4 h-4" />
+                            <span className="sidebar-label">Reports</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
-                        <BarChart3 className="w-4 h-4" />
-                        Analytics
+                        <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
+                            <BarChart3 className="w-4 h-4" />
+                            <span className="sidebar-label">Analytics</span>
                     </Button>
-                    <Button variant="secondary" className="w-full justify-start gap-3">
-                        <Settings className="w-4 h-4" />
-                        Profile
+                        <Button variant="secondary" className="sidebar-item w-full justify-start gap-3">
+                            <Settings className="w-4 h-4" />
+                            <span className="sidebar-label">Profile</span>
                     </Button>
                 </nav>
             </aside>
@@ -167,6 +245,21 @@ export default function DoctorProfile() {
                                 <p className="text-sm text-muted-foreground">Loading profile...</p>
                             ) : (
                                 <>
+                                    <div className="flex flex-wrap items-center gap-4">
+                                        <div className="w-16 h-16 rounded-full overflow-hidden bg-muted flex items-center justify-center">
+                                            {photoUrl ? <img src={photoUrl} alt="profile" className="w-full h-full object-cover" /> : <UserCircle2 className="w-10 h-10 text-muted-foreground" />}
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="photo">Profile picture</Label>
+                                            <div className="flex items-center gap-2">
+                                                <Input id="photo" type="file" accept="image/*" onChange={onPhotoChange} disabled={uploadingPhoto || loading} />
+                                                <Button variant="outline" size="sm" disabled={uploadingPhoto || loading}>
+                                                    <Camera className="w-4 h-4 mr-1" />{uploadingPhoto ? "Uploading" : "Use Cloudinary"}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </div>
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="space-y-2">
                                             <Label htmlFor="name">Full Name</Label>
@@ -205,10 +298,47 @@ export default function DoctorProfile() {
                                         />
                                     </div>
 
+                                    <Card className="border-dashed" id="preferences">
+                                        <CardHeader className="pb-2">
+                                            <CardTitle className="text-base">Preferences</CardTitle>
+                                        </CardHeader>
+                                        <CardContent className="space-y-4">
+                                            <div className="space-y-2">
+                                                <p className="text-sm font-medium">Theme</p>
+                                                <div className="flex flex-wrap gap-2">
+                                                    <Button variant={theme === "light" ? "default" : "outline"} onClick={() => setTheme("light")}>Light</Button>
+                                                    <Button variant={theme === "dark" ? "default" : "outline"} onClick={() => setTheme("dark")}>Dark</Button>
+                                                    <Button variant={theme === "system" ? "default" : "outline"} onClick={() => setTheme("system")}>System</Button>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center justify-between rounded-md border p-3">
+                                                <div>
+                                                    <p className="font-medium">Email notifications</p>
+                                                    <p className="text-xs text-muted-foreground">Appointment and message summaries.</p>
+                                                </div>
+                                                <Switch checked={emailNotifications} onCheckedChange={setEmailNotifications} />
+                                            </div>
+                                            <div className="flex items-center justify-between rounded-md border p-3">
+                                                <div>
+                                                    <p className="font-medium">Push notifications</p>
+                                                    <p className="text-xs text-muted-foreground">Instant in-app alerts.</p>
+                                                </div>
+                                                <Switch checked={pushNotifications} onCheckedChange={setPushNotifications} />
+                                            </div>
+                                            <div className="flex items-center justify-between rounded-md border p-3">
+                                                <div>
+                                                    <p className="font-medium">Share profile with patients</p>
+                                                    <p className="text-xs text-muted-foreground">Allow patients to view your photo and specialty.</p>
+                                                </div>
+                                                <Switch checked={shareData} onCheckedChange={setShareData} />
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+
                                     <div className="flex justify-end gap-2 pt-2">
                                         <Button variant="outline" onClick={() => navigate("/doctor")}>Back</Button>
                                         <Button onClick={handleSave} disabled={saving}>
-                                            {saving ? "Saving..." : "Save Profile"}
+                                            {saving ? "Saving..." : "Save Profile & Preferences"}
                                         </Button>
                                     </div>
                                 </>

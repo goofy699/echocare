@@ -72,8 +72,9 @@ function getPriorityColor(priority: ReminderPriority) {
     }
 }
 
-function getStatusBadge(reminder: ReminderRecord, now: Date) {
-    const isMissed = reminder.status === "pending" && reminder.dueAt.getTime() < now.getTime();
+function getStatusBadge(reminder: ReminderRecord, now: Date, graceMs: number) {
+    const isMissed =
+        reminder.status === "pending" && now.getTime() - reminder.dueAt.getTime() > graceMs;
 
     if (reminder.status === "completed") {
         return <Badge className="bg-green-500/10 text-green-600 hover:bg-green-500/20">Completed</Badge>;
@@ -109,6 +110,7 @@ function toDateTimeLocalValue(date: Date) {
 export default function PatientReminders() {
     const { toast } = useToast();
     const user = auth.currentUser;
+    const graceMs = 5 * 60 * 1000; // five-minute grace window
 
     const [reminders, setReminders] = useState<ReminderRecord[]>([]);
     const [searchQuery, setSearchQuery] = useState("");
@@ -130,7 +132,8 @@ export default function PatientReminders() {
         return () => unsubscribe();
     }, [user?.uid]);
 
-    const buckets = useMemo(() => getReminderBuckets(reminders, now), [reminders, now]);
+    const effectiveNow = new Date(now.getTime() - graceMs);
+    const buckets = useMemo(() => getReminderBuckets(reminders, effectiveNow), [effectiveNow, reminders]);
 
     const listByView = useMemo(() => {
         if (view === "upcoming") return buckets.upcoming;
@@ -370,7 +373,8 @@ export default function PatientReminders() {
                     ) : (
                         filteredReminders.map((reminder) => {
                             const Icon = getReminderIcon(reminder.type);
-                            const canTakeAction = reminder.status === "pending";
+                            const missed = reminder.status === "pending" && now.getTime() - reminder.dueAt.getTime() > graceMs;
+                            const canTakeAction = reminder.status === "pending" && !missed;
 
                             return (
                                 <div key={reminder.id} className="p-3 sm:p-4 border rounded-lg bg-background">
@@ -386,7 +390,7 @@ export default function PatientReminders() {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                                                 <h4 className="font-semibold">{reminder.title}</h4>
-                                                {getStatusBadge(reminder, now)}
+                                                {getStatusBadge(reminder, now, graceMs)}
                                             </div>
 
                                             {reminder.description ? (
@@ -424,11 +428,21 @@ export default function PatientReminders() {
                                                     size="icon"
                                                     className="text-red-600 hover:text-red-700 hover:bg-red-500/10"
                                                     onClick={() => handleCancel(reminder.id)}
-                                                    title="Cancel reminder"
+                                                    title="Mark as missed"
                                                 >
                                                     <X className="w-4 h-4" />
                                                 </Button>
                                             </div>
+                                        ) : missed ? (
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                                onClick={() => handleDelete(reminder.id)}
+                                                title="Delete reminder"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </Button>
                                         ) : reminder.status === "canceled" || reminder.status === "completed" ? (
                                             <Button
                                                 variant="ghost"

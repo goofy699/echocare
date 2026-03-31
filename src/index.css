@@ -116,3 +116,37 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+@layer components {
+  .sidebar-collapsible {
+    width: 16rem;
+    transition: none;
+  }
+
+  .sidebar-collapsible:not(:hover) {
+    width: 16rem;
+  }
+
+  .sidebar-item {
+    transition: none;
+    overflow: visible;
+  }
+
+  .sidebar-label {
+    display: inline;
+    white-space: nowrap;
+    opacity: 1;
+    width: auto;
+    margin-left: 0.5rem;
+    transition: none;
+  }
+
+  .sidebar-label {
+    transition: opacity 150ms ease-in-out;
+  }
+
+  .sidebar-collapsible:not(:hover) .sidebar-label {
+    opacity: 0;
+    pointer-events: none;
+  }
+}

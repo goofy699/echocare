@@ -10,6 +10,7 @@ export default function AdminChats() {
     const [chats, setChats] = useState<any[]>([]);
     const [selectedChatId, setSelectedChatId] = useState("");
     const [messages, setMessages] = useState<any[]>([]);
+    const [userMap, setUserMap] = useState<Record<string, any>>({});
 
     useEffect(() => {
         const unsub = onSnapshot(collection(db, "chats"), (snap) => {
@@ -20,6 +21,17 @@ export default function AdminChats() {
         });
         return () => unsub();
     }, [selectedChatId]);
+
+    useEffect(() => {
+        const unsub = onSnapshot(collection(db, "users"), (snap) => {
+            const nextMap: Record<string, any> = {};
+            snap.docs.forEach((d) => {
+                nextMap[d.id] = d.data() as any;
+            });
+            setUserMap(nextMap);
+        });
+        return () => unsub();
+    }, []);
 
     useEffect(() => {
         if (!selectedChatId) {
@@ -45,6 +57,25 @@ export default function AdminChats() {
 
     const selected = useMemo(() => chats.find((chat) => chat.id === selectedChatId) || null, [chats, selectedChatId]);
 
+    const displayUser = (uid?: string) => {
+        if (!uid) return "Unknown user";
+        const u = userMap[uid];
+        if (!u) return uid;
+        return u.name || u.displayName || u.email || uid;
+    };
+
+    const roleOf = (uid?: string) => {
+        if (!uid) return "";
+        const role = userMap[uid]?.role;
+        return role ? String(role) : "";
+    };
+
+    const threadLabel = (chat: any) => {
+        const participants = (Array.isArray(chat.participants) ? chat.participants : [chat.patientId, chat.doctorId]).filter(Boolean);
+        if (participants.length === 0) return chat.id;
+        return participants.map((uid: string) => displayUser(uid)).join(" vs ");
+    };
+
     return (
         <AdminLayout title="Admin Chat Monitor" subtitle="Privacy audit view of user chat text and attachments.">
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[75vh] min-h-0">
@@ -54,7 +85,8 @@ export default function AdminChats() {
                         {chats.map((chat) => (
                             <Button key={chat.id} variant={chat.id === selectedChatId ? "secondary" : "ghost"} className="w-full justify-start h-auto py-2" onClick={() => setSelectedChatId(chat.id)}>
                                 <div className="text-left min-w-0">
-                                    <p className="text-sm font-medium truncate">{chat.id}</p>
+                                    <p className="text-sm font-medium truncate">{threadLabel(chat)}</p>
+                                    <p className="text-[11px] text-muted-foreground truncate">Thread ID: {chat.id}</p>
                                     <p className="text-xs text-muted-foreground truncate">{chat.lastMessage || "No messages"}</p>
                                 </div>
                             </Button>
@@ -64,7 +96,7 @@ export default function AdminChats() {
 
                 <Card className="lg:col-span-3 flex flex-col min-h-0 overflow-hidden">
                     <CardHeader>
-                        <CardTitle>{selected ? `Thread ${selected.id}` : "Select thread"}</CardTitle>
+                        <CardTitle>{selected ? threadLabel(selected) : "Select thread"}</CardTitle>
                     </CardHeader>
                     <CardContent className="flex-1 space-y-3 overflow-y-auto min-h-0">
                         {messages.length === 0 ? (
@@ -72,7 +104,7 @@ export default function AdminChats() {
                         ) : messages.map((message) => (
                             <div key={message.id} className="rounded-md border p-3 text-sm">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <p className="font-medium">Sender: {message.senderId || "-"}</p>
+                                    <p className="font-medium">Sender: {displayUser(message.senderId)}{roleOf(message.senderId) ? ` (${roleOf(message.senderId)})` : ""}</p>
                                     <p className="text-xs text-muted-foreground">{formatDateTime(message.createdAt)}</p>
                                 </div>
                                 {message.text ? <p className="mt-1 whitespace-pre-wrap break-words">{message.text}</p> : null}

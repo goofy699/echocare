@@ -22,9 +22,10 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow create: if request.auth != null && request.auth.uid == userId;
       // Allow the owner to update their profile but disallow changing role via client
-      allow update: if request.auth != null && request.auth.uid == userId
-                    && !(request.resource.data.keys().hasAny(['role']) && request.resource.data.role != resource.data.role);
-      allow delete: if false;
+      allow update: if isAdmin()
+                    || (request.auth != null && request.auth.uid == userId
+                    && !(request.resource.data.keys().hasAny(['role']) && request.resource.data.role != resource.data.role));
+      allow delete: if isAdmin();
     }
 
     // Chats collections (dev convenience). Authenticated users may read/write
@@ -130,6 +131,48 @@ service cloud.firestore {
         resource.data.patientId == request.auth.uid ||
         isAdmin()
       );
+    }
+
+    // Notes: patient personal notes.
+    match /notes/{noteId} {
+      allow create: if signedIn()
+                    && request.resource.data.patientId == request.auth.uid
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.content is string
+                    && request.resource.data.title is string;
+
+      allow read: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow update, delete: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // SOS alerts: patient can create, caregiver/admin can read, patient sees own alerts
+    match /sosAlerts/{alertId} {
+      allow create: if signedIn()
+                    && request.resource.data.patientId == request.auth.uid
+                    && request.resource.data.lat is number
+                    && request.resource.data.lng is number
+                    && request.resource.data.status in ['active', 'resolved'];
+
+      allow read: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.caregiverId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow update: if signedIn() && (
+        resource.data.patientId == request.auth.uid ||
+        resource.data.caregiverId == request.auth.uid ||
+        isAdmin()
+      );
+
+      allow delete: if isAdmin();
     }
 
     // Deny everything else by default

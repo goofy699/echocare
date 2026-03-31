@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Logo } from "@/components/Logo";
 import { LayoutDashboard, Users, Calendar, MessageSquare, BarChart3, Settings, Search, Bell, CheckCircle, TrendingUp, Star, Bot, X, Paperclip, FileText } from "lucide-react";
 import { format } from "date-fns";
@@ -17,6 +18,7 @@ import { AppointmentRecord } from "@/services/appointments";
 export default function DoctorDashboard() {
   const navigate = useNavigate();
   const doctorId = auth.currentUser?.uid;
+  const [doctorName, setDoctorName] = useState(auth.currentUser?.displayName || auth.currentUser?.email || "Doctor");
 
   const [patients, setPatients] = useState<any[]>([]);
   const [patientsLoading, setPatientsLoading] = useState(true);
@@ -31,6 +33,13 @@ export default function DoctorDashboard() {
   const [miniSending, setMiniSending] = useState(false);
   const [miniSelectedFile, setMiniSelectedFile] = useState<File | null>(null);
   const miniFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const initials = (value?: string) => {
+    const text = (value || "").trim();
+    if (!text) return "P";
+    const parts = text.split(/\s+/).slice(0, 2);
+    return parts.map((p) => p[0]?.toUpperCase() || "").join("") || "P";
+  };
 
   const isReportMessage = (text?: string) =>
     typeof text === "string" && text.trim().startsWith("[REPORT]");
@@ -53,6 +62,7 @@ export default function DoctorDashboard() {
     const unsubscribe = onSnapshot(doc(db, "users", doctorId), (snap) => {
       const data = snap.data() as any;
       const availability = data?.availability;
+      setDoctorName(data?.name || data?.displayName || auth.currentUser?.displayName || auth.currentUser?.email || "Doctor");
       setIsAvailable(availability !== "unavailable");
     });
 
@@ -219,46 +229,46 @@ export default function DoctorDashboard() {
       <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
         <Logo className="mb-8" />
         <nav className="space-y-2">
-          <Button variant="secondary" className="w-full justify-start gap-3">
+          <Button variant="secondary" className="sidebar-item w-full justify-start gap-3">
             <LayoutDashboard className="w-4 h-4" />
-            Dashboard
+            <span className="sidebar-label">Dashboard</span>
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
+          <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
             <Users className="w-4 h-4" />
-            Patients
+            <span className="sidebar-label">Patients</span>
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
+          <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
             <Calendar className="w-4 h-4" />
-            Appointments
+            <span className="sidebar-label">Appointments</span>
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+          <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
             <MessageSquare className="w-4 h-4" />
-            Messages
+            <span className="sidebar-label">Messages</span>
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
+          <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
             <FileText className="w-4 h-4" />
-            Reports
+            <span className="sidebar-label">Reports</span>
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
+          <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
             <BarChart3 className="w-4 h-4" />
-            Analytics
+            <span className="sidebar-label">Analytics</span>
           </Button>
-          <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/profile")}>
+          <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
             <Settings className="w-4 h-4" />
-            Settings
+            <span className="sidebar-label">Settings</span>
           </Button>
         </nav>
         <div className="mt-auto pt-8">
           <Button
             variant="outline"
-            className="w-full justify-start gap-3"
+            className="sidebar-item w-full justify-start gap-3"
             onClick={() => {
               auth.signOut();
               navigate("/auth");
             }}
           >
             <span className="text-sm">🚪</span>
-            Logout
+            <span className="sidebar-label">Logout</span>
           </Button>
         </div>
       </aside>
@@ -298,7 +308,7 @@ export default function DoctorDashboard() {
 
         <div className="p-4 sm:p-6 lg:p-8">
           <div className="mb-8">
-            <h1 className="text-2xl sm:text-3xl font-bold mb-2">Good Morning, Dr. Smith</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold mb-2">Good Morning, {doctorName}</h1>
           </div>
 
           {/* Recent Patients */}
@@ -411,9 +421,6 @@ export default function DoctorDashboard() {
             </Card>
           </div>
 
-          <Button variant="destructive" className="w-14 h-14 rounded-full fixed bottom-6 left-6 shadow-lg z-50">
-            SOS
-          </Button>
         </div>
       </main>
 
@@ -440,7 +447,7 @@ export default function DoctorDashboard() {
       </div>
 
       {showMiniChat && (
-        <div className="fixed bottom-24 right-6 w-[min(92vw,360px)] z-50">
+        <div className="fixed bottom-24 left-3 right-3 sm:left-auto sm:right-6 sm:w-[min(96vw,560px)] z-50">
           <Card className="shadow-large border-2">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between gap-3">
@@ -456,40 +463,69 @@ export default function DoctorDashboard() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="h-52 overflow-y-auto space-y-2 rounded-md border p-2 bg-muted/20">
-                {miniMessages.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">Start a quick conversation with your patient.</p>
-                ) : (
-                  miniMessages.map((m) => (
-                    <div
-                      key={m.id}
-                      className={`max-w-[82%] p-2 rounded-md text-xs ${m.senderId === doctorId ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
-                    >
-                      {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
-                      {m.attachment && (
-                        <div className={m.text ? "mt-2" : ""}>
-                          {m.attachment.kind === "image" ? (
-                            <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
-                              <img
-                                src={m.attachment.url}
-                                alt={m.attachment.name || "attachment"}
-                                className="max-h-28 rounded border"
-                              />
-                            </a>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => downloadAttachment(m.attachment)}
-                              className="underline underline-offset-2"
-                            >
-                              {m.attachment.name || "PDF file"}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+                <div className="sm:col-span-2 rounded-md border p-2 h-28 sm:h-[300px] overflow-y-auto space-y-2">
+                  {patients.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No patients found.</p>
+                  ) : (
+                    patients.map((patient: any) => {
+                      const patientLabel = patient.name || patient.displayName || patient.email || patient.id;
+                      return (
+                        <Button
+                          key={patient.id}
+                          variant={miniChatPatient?.id === patient.id ? "secondary" : "ghost"}
+                          className="w-full justify-start h-auto py-2"
+                          onClick={() => setSelectedPatient(patient)}
+                        >
+                          <Avatar className="h-8 w-8 mr-2">
+                            <AvatarImage src={patient.photoURL || undefined} alt={patientLabel} />
+                            <AvatarFallback>{initials(patientLabel)}</AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0 text-left">
+                            <p className="text-xs font-medium truncate">{patientLabel}</p>
+                            <p className="text-[11px] text-muted-foreground truncate">{patient.email || "Patient"}</p>
+                          </div>
+                        </Button>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="sm:col-span-3 h-[220px] sm:h-[300px] overflow-y-auto space-y-2 rounded-md border p-2 bg-muted/20">
+                  {miniMessages.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">Start a quick conversation with your patient.</p>
+                  ) : (
+                    miniMessages.map((m) => (
+                      <div
+                        key={m.id}
+                        className={`max-w-[88%] p-2 rounded-md text-xs ${m.senderId === doctorId ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}
+                      >
+                        {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
+                        {m.attachment && (
+                          <div className={m.text ? "mt-2" : ""}>
+                            {m.attachment.kind === "image" ? (
+                              <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
+                                <img
+                                  src={m.attachment.url}
+                                  alt={m.attachment.name || "attachment"}
+                                  className="max-h-28 rounded border"
+                                />
+                              </a>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => downloadAttachment(m.attachment)}
+                                className="underline underline-offset-2"
+                              >
+                                {m.attachment.name || "PDF file"}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
 
               {miniSelectedFile && (

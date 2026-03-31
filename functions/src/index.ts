@@ -22,6 +22,25 @@ function assertRole(role: any): asserts role is Role {
     }
 }
 
+async function requireAdmin(uid: string | undefined) {
+    if (!uid) throw new HttpsError("unauthenticated", "Not signed in.");
+    const callerDoc = await db.collection("users").doc(uid).get();
+    const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+    if (callerRole !== "admin") {
+        throw new HttpsError("permission-denied", "Admin access required.");
+    }
+}
+
+async function writeAdminAudit(action: string, adminUid: string, targetUid: string, details?: Record<string, any>) {
+    await db.collection("adminActivity").add({
+        action,
+        adminUid,
+        targetUid,
+        ...(details ? { details } : {}),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+}
+
 /* =========================
    Email Transport
 ========================= */
@@ -242,16 +261,8 @@ export const listPatientsForDoctor = onCall({ cors: true }, async (request) => {
 });
 
 export const adminCreateUser = onCall({ cors: true }, async (request) => {
-    const auth = request.auth;
-    if (!auth) {
-        throw new HttpsError("unauthenticated", "Not signed in.");
-    }
-
-    const callerDoc = await db.collection("users").doc(auth.uid).get();
-    const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
-    if (callerRole !== "admin") {
-        throw new HttpsError("permission-denied", "Admin access required.");
-    }
+    const adminUid = request.auth?.uid;
+    await requireAdmin(adminUid);
 
     const email = String(request.data?.email || "").trim().toLowerCase();
     const password = String(request.data?.password || "").trim();
@@ -287,16 +298,213 @@ export const adminCreateUser = onCall({ cors: true }, async (request) => {
         email,
         role,
         ...(name ? { name } : {}),
-        createdBy: auth.uid,
+        suspended: false,
+        createdBy: adminUid,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
+
+    await writeAdminAudit("create-user", adminUid!, user.uid, { email, role });
 
     return {
         uid: user.uid,
         email,
         role,
     };
+});
+
+export const adminSetUserSuspended = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    await requireAdmin(auth?.uid);
+
+    const targetUid = String(request.data?.uid || "").trim();
+    const suspended = Boolean(request.data?.suspended);
+    const reason = String(request.data?.reason || "").trim();
+
+    if (!targetUid) {
+        throw new HttpsError("invalid-argument", "uid is required.");
+    }
+
+    if (auth?.uid === targetUid) {
+        throw new HttpsError("failed-precondition", "You cannot suspend your own account.");
+    }
+
+    await admin.auth().updateUser(targetUid, { disabled: suspended });
+
+    await db.collection("users").doc(targetUid).set({
+        suspended,
+        ...(reason ? { suspendedReason: reason } : {}),
+        suspendedBy: auth?.uid,
+        ...(suspended
+            ? { suspendedAt: admin.firestore.FieldValue.serverTimestamp() }
+            : { unsuspendedAt: admin.firestore.FieldValue.serverTimestamp() }),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await writeAdminAudit(suspended ? "suspend-user" : "unsuspend-user", auth!.uid, targetUid, {
+        ...(reason ? { reason } : {}),
+    });
+
+    return { uid: targetUid, suspended };
+});
+
+export const adminDeleteUser = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    await requireAdmin(auth?.uid);
+
+    const targetUid = String(request.data?.uid || "").trim();
+    if (!targetUid) {
+        throw new HttpsError("invalid-argument", "uid is required.");
+    }
+
+    if (auth?.uid === targetUid) {
+        throw new HttpsError("failed-precondition", "You cannot delete your own account.");
+    }
+
+    let targetEmail = "";
+    try {
+        const record = await admin.auth().getUser(targetUid);
+        targetEmail = record.email || "";
+    } catch {
+        // ignore and continue cleanup
+    }
+
+    try {
+        await admin.auth().deleteUser(targetUid);
+    } catch (error: any) {
+        if (error?.code !== "auth/user-not-found") {
+            throw new HttpsError("internal", "Failed to delete auth user.");
+        }
+    }
+
+    await db.collection("users").doc(targetUid).delete();
+    await writeAdminAudit("delete-user", auth!.uid, targetUid, { ...(targetEmail ? { email: targetEmail } : {}) });
+
+    return { uid: targetUid, deleted: true };
+});
+
+export const adminSetUserPassword = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    await requireAdmin(auth?.uid);
+
+    const targetUid = String(request.data?.uid || "").trim();
+    const newPassword = String(request.data?.newPassword || "").trim();
+
+    if (!targetUid) {
+        throw new HttpsError("invalid-argument", "uid is required.");
+    }
+    if (!newPassword || newPassword.length < 6) {
+        throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+    }
+
+    await admin.auth().updateUser(targetUid, { password: newPassword });
+    await db.collection("users").doc(targetUid).set({
+        passwordUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        passwordUpdatedBy: auth?.uid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await writeAdminAudit("set-user-password", auth!.uid, targetUid);
+    return { uid: targetUid, passwordUpdated: true };
+});
+
+export const adminGeneratePasswordResetLink = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    await requireAdmin(auth?.uid);
+
+    const uid = String(request.data?.uid || "").trim();
+    const emailInput = String(request.data?.email || "").trim().toLowerCase();
+    if (!uid && !emailInput) {
+        throw new HttpsError("invalid-argument", "uid or email is required.");
+    }
+
+    let userRecord: admin.auth.UserRecord;
+    if (uid) userRecord = await admin.auth().getUser(uid);
+    else userRecord = await admin.auth().getUserByEmail(emailInput);
+
+    const email = (userRecord.email || "").toLowerCase();
+    if (!email) {
+        throw new HttpsError("failed-precondition", "Target user has no email.");
+    }
+
+    const resetLink = await admin.auth().generatePasswordResetLink(email);
+    await writeAdminAudit("generate-password-reset-link", auth!.uid, userRecord.uid, { email });
+
+    return {
+        uid: userRecord.uid,
+        email,
+        resetLink,
+    };
+});
+
+export const recordUserActivity = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    if (!auth?.uid) {
+        throw new HttpsError("unauthenticated", "Not signed in.");
+    }
+
+    const type = String(request.data?.type || "").trim().toLowerCase();
+    const route = String(request.data?.route || "").trim();
+    const metadata = request.data?.metadata;
+
+    if (!type) {
+        throw new HttpsError("invalid-argument", "type is required.");
+    }
+
+    const userDoc = await db.collection("users").doc(auth.uid).get();
+    const userData = userDoc.exists ? (userDoc.data() as any) : {};
+
+    await db.collection("userActivity").add({
+        uid: auth.uid,
+        email: userData?.email || auth.token?.email || null,
+        role: userData?.role || null,
+        type,
+        ...(route ? { route } : {}),
+        ...(metadata && typeof metadata === "object" ? { metadata } : {}),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    const patch: Record<string, any> = {
+        lastActiveAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    if (type === "login") {
+        patch.lastLoginAt = admin.firestore.FieldValue.serverTimestamp();
+    }
+    await db.collection("users").doc(auth.uid).set(patch, { merge: true });
+
+    return { ok: true };
+});
+
+export const listUserActivity = onCall({ cors: true }, async (request) => {
+    const auth = request.auth;
+    await requireAdmin(auth?.uid);
+
+    const uid = String(request.data?.uid || "").trim();
+    const limitRaw = Number(request.data?.limit || 40);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 40;
+
+    let querySnap: admin.firestore.QuerySnapshot;
+    if (uid) {
+        querySnap = await db.collection("userActivity").where("uid", "==", uid).limit(limit).get();
+    } else {
+        querySnap = await db.collection("userActivity").limit(limit).get();
+    }
+
+    const docs = querySnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    return docs.slice(0, limit).map((d: any) => ({
+        id: d.id,
+        uid: d.uid || null,
+        email: d.email || null,
+        role: d.role || null,
+        type: d.type || null,
+        route: d.route || null,
+        metadata: d.metadata || null,
+        createdAt: d.createdAt || null,
+    }));
 });
 
 // HTTP endpoints with CORS for cross-origin browser fetches
@@ -388,11 +596,73 @@ export const listPatientsForDoctorHttp = onRequest(async (req, res) => {
     }
 });
 
+export const listUserActivityHttp = onRequest(async (req, res) => {
+    console.log("listUserActivityHttp", req.method, "origin=", req.headers.origin);
+    setCors(res, req.headers.origin as string | undefined);
+    if (req.method === "OPTIONS") {
+        res.status(204).send("");
+        return;
+    }
+
+    try {
+        const authHeader = (req.headers.authorization || "").split("Bearer ")[1];
+        if (!authHeader) {
+            res.status(401).json({ error: "unauthenticated" });
+            return;
+        }
+
+        const decoded = await admin.auth().verifyIdToken(authHeader);
+        const callerId = decoded.uid;
+        const callerDoc = await db.collection("users").doc(callerId).get();
+        const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+        if (callerRole !== "admin") {
+            res.status(403).json({ error: "permission-denied" });
+            return;
+        }
+
+        const body = req.method === "GET" ? req.query : req.body;
+        const uid = String(body?.uid || "").trim();
+        const limitRaw = Number(body?.limit || 40);
+        const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 40;
+
+        let querySnap: admin.firestore.QuerySnapshot;
+        if (uid) {
+            querySnap = await db.collection("userActivity").where("uid", "==", uid).limit(limit).get();
+        } else {
+            querySnap = await db.collection("userActivity").limit(limit).get();
+        }
+
+        const docs = querySnap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as any) }))
+            .sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+            .slice(0, limit)
+            .map((d: any) => ({
+                id: d.id,
+                uid: d.uid || null,
+                email: d.email || null,
+                role: d.role || null,
+                type: d.type || null,
+                route: d.route || null,
+                metadata: d.metadata || null,
+                createdAt: d.createdAt || null,
+            }));
+
+        res.json(docs);
+        return;
+    } catch (err) {
+        console.error("listUserActivityHttp error:", err);
+        res.status(500).json({ error: "internal" });
+        return;
+    }
+});
+
 /* =========================
    RESET PASSWORD (FORGOT PASSWORD FLOW)
 ========================= */
 
 export const resetPassword = onCall({ cors: true }, async (request) => {
+    await requireAdmin(request.auth?.uid);
+
     const email = String(request.data?.email || "").trim().toLowerCase();
     const newPassword = String(request.data?.newPassword || "").trim();
 

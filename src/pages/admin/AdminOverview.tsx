@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { collection, onSnapshot } from "firebase/firestore";
-import { db } from "@/firebase";
+import { auth, db } from "@/firebase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, Calendar, Pill, MessageSquare } from "lucide-react";
@@ -8,6 +8,7 @@ import AdminLayout from "./AdminLayout";
 import { asDate, formatDateTime, safeName } from "./adminUtils";
 
 export default function AdminOverview() {
+    const [adminName, setAdminName] = useState(auth.currentUser?.displayName || auth.currentUser?.email || "Admin");
     const [users, setUsers] = useState<any[]>([]);
     const [appointments, setAppointments] = useState<any[]>([]);
     const [reminders, setReminders] = useState<any[]>([]);
@@ -16,6 +17,14 @@ export default function AdminOverview() {
     useEffect(() => {
         const unUsers = onSnapshot(collection(db, "users"), (snap) => {
             setUsers(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
+
+            const currentUid = auth.currentUser?.uid;
+            if (!currentUid) return;
+
+            const currentUser = snap.docs.find((docSnap) => docSnap.id === currentUid)?.data() as any;
+            if (currentUser) {
+                setAdminName(currentUser.name || currentUser.displayName || auth.currentUser?.displayName || auth.currentUser?.email || "Admin");
+            }
         });
         const unAppointments = onSnapshot(collection(db, "appointments"), (snap) => {
             setAppointments(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })));
@@ -76,7 +85,7 @@ export default function AdminOverview() {
     }, [appointments, chats, reminders, users]);
 
     return (
-        <AdminLayout title="Admin Dashboard" subtitle="Real-time platform metrics across patient, doctor, and caregiver workflows.">
+        <AdminLayout title={`Welcome Back, ${adminName}!`} subtitle="Real-time platform metrics across patient, doctor, and caregiver workflows.">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <Card>
                     <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Users</CardTitle></CardHeader>

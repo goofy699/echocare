@@ -4,8 +4,14 @@ import { auth } from "@/firebase";
 
 export default function ProtectedRoute() {
     const location = useLocation();
+    const hasSessionLogin = sessionStorage.getItem("echocare_logged_in") === "1";
 
     if (!auth.currentUser) {
+        return <Navigate to="/auth" state={{ from: location.pathname }} replace />;
+    }
+
+    if (!hasSessionLogin) {
+        void auth.signOut();
         return <Navigate to="/auth" state={{ from: location.pathname }} replace />;
     }
 

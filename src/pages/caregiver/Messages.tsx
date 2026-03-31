@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { auth } from "@/firebase";
-import { createChat, listenToMessages, listenUsersByRole, sendMessage, uploadChatAttachment } from "@/services/chat";
+import { createChat, listenToMessages, listenUsersByRole, sendMessage, uploadChatAttachment, markMessagesSeen, listenCaregiverPatients } from "@/services/chat";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Logo } from "@/components/Logo";
 import { LayoutDashboard, Users, MessageSquare, Calendar, Settings, Pill, Paperclip, Send, X, FileText } from "lucide-react";
 
@@ -23,22 +25,57 @@ export default function CaregiverMessages() {
     const [sending, setSending] = useState(false);
     const fileRef = useRef<HTMLInputElement | null>(null);
 
+    const initials = (value?: string) => {
+        const text = (value || "").trim();
+        if (!text) return "U";
+        const parts = text.split(/\s+/).slice(0, 2);
+        return parts.map((p) => p[0]?.toUpperCase() || "").join("") || "U";
+    };
+
+    const displayName = (item: any) => item?.name || item?.displayName || item?.email || item?.id || "Unknown";
+
+    const displaySub = (item: any) => item?.email || (mode === "patients" ? "Patient" : "Doctor");
+
+    const isReportMessage = (text?: string) => typeof text === "string" && text.trim().startsWith("[REPORT]");
+
     useEffect(() => {
-        const unPatients = listenUsersByRole("patient", setPatients);
+        if (!caregiverId) return;
+        const unPatients = listenCaregiverPatients(caregiverId, setPatients);
         const unDoctors = listenUsersByRole("doctor", setDoctors);
         return () => {
             unPatients && unPatients();
             unDoctors && unDoctors();
         };
-    }, []);
+    }, [caregiverId]);
 
-    const contacts = mode === "patients" ? patients : doctors;
+    const assignedDoctorIds = useMemo(() => {
+        const ids = new Set<string>();
+        patients.forEach((p) => {
+            if (p.assignedDoctorId) ids.add(p.assignedDoctorId);
+            if (Array.isArray(p.assignedDoctors)) p.assignedDoctors.forEach((d: string) => ids.add(d));
+            if (p.doctorId) ids.add(p.doctorId);
+        });
+        return Array.from(ids);
+    }, [patients]);
+
+    const filteredDoctors = useMemo(() => {
+        if (assignedDoctorIds.length === 0) return [] as any[];
+        return doctors.filter((d) => assignedDoctorIds.includes(d.id));
+    }, [doctors, assignedDoctorIds]);
+
+    const contacts = mode === "patients" ? patients : filteredDoctors;
 
     useEffect(() => {
         if (!active && contacts.length > 0) {
             setActive(contacts[0]);
         }
     }, [active, contacts]);
+
+    useEffect(() => {
+        if (active && !contacts.find((c) => c.id === active.id)) {
+            setActive(contacts[0] || null);
+        }
+    }, [contacts, active]);
 
     const chatId = caregiverId && active?.id ? [caregiverId, active.id].sort().join("_") : "";
 
@@ -48,10 +85,20 @@ export default function CaregiverMessages() {
             return;
         }
 
-        createChat(chatId, caregiverId, active.id, user?.displayName || user?.email || caregiverId);
-        const unsubscribe = listenToMessages(chatId, setMessages);
+        const patientIdForChat = mode === "patients" ? active.id : caregiverId;
+        const doctorIdForChat = mode === "doctors" ? active.id : caregiverId;
+        const patientNameForChat = mode === "patients"
+            ? displayName(active)
+            : (user?.displayName || user?.email || caregiverId);
+
+        createChat(chatId, patientIdForChat, doctorIdForChat, patientNameForChat);
+        const unsubscribe = listenToMessages(chatId, (msgs) => {
+            const cleaned = (msgs || []).filter((m: any) => !isReportMessage(m?.text));
+            setMessages(cleaned);
+            markMessagesSeen(chatId, caregiverId).catch(() => undefined);
+        });
         return () => unsubscribe();
-    }, [active, caregiverId, chatId, user]);
+    }, [active, caregiverId, chatId, user, mode]);
 
     const onPickFile = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0] || null;
@@ -66,6 +113,14 @@ export default function CaregiverMessages() {
         setSelectedFile(file);
     };
 
+    const getPrimaryDoctorId = (patient: any) => {
+        if (!patient) return null;
+        if (patient.assignedDoctorId) return patient.assignedDoctorId;
+        if (patient.doctorId) return patient.doctorId;
+        if (Array.isArray(patient.assignedDoctors) && patient.assignedDoctors.length > 0) return patient.assignedDoctors[0];
+        return null;
+    };
+
     const send = async () => {
         if ((!message.trim() && !selectedFile) || !caregiverId || !chatId || !active) return;
         try {
@@ -73,6 +128,16 @@ export default function CaregiverMessages() {
             let attachment;
             if (selectedFile) attachment = await uploadChatAttachment(chatId, caregiverId, selectedFile);
             await sendMessage(chatId, caregiverId, message, attachment);
+
+            if (mode === "patients") {
+                const doctorId = getPrimaryDoctorId(active);
+                if (doctorId) {
+                    const doctorChatId = [active.id, doctorId].sort().join("_");
+                    const textForDoctor = message ? `Caregiver note: ${message}` : "Caregiver shared an update.";
+                    await createChat(doctorChatId, active.id, doctorId, displayName(active));
+                    await sendMessage(doctorChatId, caregiverId, textForDoctor, undefined, { senderRole: "caregiver" });
+                }
+            }
             setMessage("");
             setSelectedFile(null);
             if (fileRef.current) fileRef.current.value = "";
@@ -106,7 +171,7 @@ export default function CaregiverMessages() {
         URL.revokeObjectURL(objectUrl);
     };
 
-    const label = useMemo(() => active?.name || active?.displayName || active?.email || "Select contact", [active]);
+    const label = useMemo(() => displayName(active) || "Select contact", [active]);
 
     return (
         <div className="min-h-screen bg-background flex">
@@ -126,37 +191,98 @@ export default function CaregiverMessages() {
                 <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-4 h-[80vh] min-h-0">
                     <Card className="lg:col-span-1 p-4 flex flex-col min-h-0">
                         <div className="flex gap-2 mb-3">
-                            <Button size="sm" variant={mode === "patients" ? "secondary" : "outline"} onClick={() => { setMode("patients"); setActive(null); }}>Patients</Button>
-                            <Button size="sm" variant={mode === "doctors" ? "secondary" : "outline"} onClick={() => { setMode("doctors"); setActive(null); }}>Doctors</Button>
+                            <Button size="sm" variant={mode === "patients" ? "secondary" : "outline"} onClick={() => { setMode("patients"); setActive(null); }}>Patient</Button>
+                            <Button size="sm" variant={mode === "doctors" ? "secondary" : "outline"} onClick={() => { setMode("doctors"); setActive(null); }}>Doctor</Button>
                         </div>
                         <div className="space-y-2 overflow-y-auto min-h-0">
-                            {contacts.map((item: any) => (
-                                <Button key={item.id} variant={active?.id === item.id ? "secondary" : "ghost"} className="w-full justify-start" onClick={() => setActive(item)}>
-                                    {item.name || item.displayName || item.email || item.id}
+                            {contacts.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">
+                                    {mode === "patients" ? "No assigned patients." : "No linked doctors for your patients."}
+                                </p>
+                            ) : contacts.map((item: any) => (
+                                <Button key={item.id} variant={active?.id === item.id ? "secondary" : "ghost"} className="w-full justify-start h-auto py-2" onClick={() => setActive(item)}>
+                                    <Avatar className="h-8 w-8 mr-3">
+                                        <AvatarImage src={item.photoURL || undefined} alt={displayName(item)} />
+                                        <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
+                                    </Avatar>
+                                    <div className="min-w-0 text-left">
+                                        <p className="font-medium truncate">{displayName(item)}</p>
+                                        <p className="text-xs text-muted-foreground truncate">{displaySub(item)}</p>
+                                    </div>
                                 </Button>
                             ))}
                         </div>
                     </Card>
 
                     <Card className="lg:col-span-3 flex flex-col min-h-0 overflow-hidden">
-                        <CardHeader><CardTitle>{label}</CardTitle></CardHeader>
+                        <CardHeader>
+                            <CardTitle>
+                                {active ? (
+                                    <div className="flex items-center gap-3">
+                                        <Avatar className="h-9 w-9">
+                                            <AvatarImage src={active.photoURL || undefined} alt={label} />
+                                            <AvatarFallback>{initials(label)}</AvatarFallback>
+                                        </Avatar>
+                                        <div>
+                                            <p className="text-base font-semibold">{label}</p>
+                                            <p className="text-xs text-muted-foreground font-normal">{displaySub(active)}</p>
+                                        </div>
+                                    </div>
+                                ) : "Select contact"}
+                            </CardTitle>
+                        </CardHeader>
                         <CardContent className="flex-1 p-4 space-y-3 overflow-y-auto min-h-0">
-                            {messages.map((m: any) => (
-                                <div key={m.id} className={`max-w-[75%] p-3 rounded-lg text-sm ${m.senderId === caregiverId ? "ml-auto bg-primary text-primary-foreground" : "bg-muted"}`}>
-                                    {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
-                                    {m.attachment && (
-                                        <div className={m.text ? "mt-2" : ""}>
-                                            {m.attachment.kind === "image" ? (
-                                                <a href={m.attachment.url} target="_blank" rel="noreferrer"><img src={m.attachment.url} alt={m.attachment.name || "attachment"} className="max-h-40 rounded border" /></a>
-                                            ) : (
-                                                <button type="button" onClick={() => downloadAttachment(m.attachment)} className="inline-flex items-center gap-1 underline">
-                                                    <FileText className="w-4 h-4" /> {m.attachment.name || "PDF"}
-                                                </button>
+                            {messages.map((m: any) => {
+                                const createdAt: Date | null = m.createdAt?.toDate
+                                    ? m.createdAt.toDate()
+                                    : m.createdAt
+                                        ? new Date(m.createdAt)
+                                        : null;
+                                const timeLabel = createdAt ? format(createdAt, "p") : "Sending…";
+                                const isMine = m.senderId === caregiverId;
+                                const seenBy = Array.isArray(m.seenBy) ? m.seenBy : [];
+                                const counterpartId = active?.id;
+                                const seen = isMine && counterpartId ? seenBy.includes(counterpartId) : false;
+                                const statusLabel = isMine ? (seen ? `Seen · ${timeLabel}` : `Sent · ${timeLabel}`) : timeLabel;
+
+                                return (
+                                    <div key={m.id} className="space-y-1">
+                                        <div
+                                            className={`max-w-[70%] p-3 rounded-lg text-sm ${isMine
+                                                ? "ml-auto bg-primary text-primary-foreground"
+                                                : "bg-muted"
+                                                }`}
+                                        >
+                                            {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
+                                            {m.attachment && (
+                                                <div className={m.text ? "mt-2" : ""}>
+                                                    {m.attachment.kind === "image" ? (
+                                                        <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
+                                                            <img
+                                                                src={m.attachment.url}
+                                                                alt={m.attachment.name || "attachment"}
+                                                                className="max-h-48 rounded-md border"
+                                                            />
+                                                        </a>
+                                                    ) : (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => downloadAttachment(m.attachment)}
+                                                            className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm bg-background/60"
+                                                        >
+                                                            <FileText className="w-4 h-4" />
+                                                            <span className="truncate max-w-[180px]">{m.attachment.name || "PDF file"}</span>
+                                                        </button>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
-                                    )}
-                                </div>
-                            ))}
+                                        <p className={`text-[11px] text-muted-foreground ${isMine ? "text-right" : "text-left"}`}>
+                                            {statusLabel}
+                                        </p>
+                                    </div>
+                                );
+                            })}
                         </CardContent>
                         <div className="border-t p-3 space-y-2">
                             {selectedFile && (

@@ -89,6 +89,10 @@ export default function Auth() {
   });
   const [isLoading, setIsLoading] = useState(false);
 
+  const markSessionLoggedIn = () => {
+    sessionStorage.setItem("echocare_logged_in", "1");
+  };
+
   const normalizeCsv = (value: string) =>
     value
       .split(",")
@@ -128,7 +132,8 @@ export default function Auth() {
 
   // ✅ If already logged in, check role from Firestore and route correctly
   const handleRoleSelect = async (role: UserRole) => {
-    if (auth.currentUser) {
+    const hasSessionLogin = sessionStorage.getItem("echocare_logged_in") === "1";
+    if (auth.currentUser && hasSessionLogin) {
       try {
         const snap = await getDoc(doc(db, "users", auth.currentUser.uid));
         const storedRole = (snap.data()?.role as UserRole) || null;
@@ -140,6 +145,8 @@ export default function Auth() {
       } catch {
         // ignore and show login form
       }
+    } else if (auth.currentUser && !hasSessionLogin) {
+      await signOut(auth);
     }
 
     setSelectedRole(role);
@@ -243,8 +250,22 @@ export default function Auth() {
 
         // ✅ READ ROLE FROM FIRESTORE (source of truth)
         const snap = await getDoc(doc(db, "users", cred.user.uid));
-        const storedRole = (snap.data()?.role as UserRole) || null;
-        const storedName = snap.data()?.name as string | undefined;
+        if (!snap.exists()) {
+          toast.error("Your account profile was deleted. Please contact admin.");
+          await signOut(auth);
+          return;
+        }
+
+        const userData = snap.data() as any;
+        const storedRole = (userData?.role as UserRole) || null;
+        const storedName = userData?.name as string | undefined;
+        const suspended = Boolean(userData?.suspended);
+
+        if (suspended) {
+          toast.error("Your account is suspended. Please contact admin.");
+          await signOut(auth);
+          return;
+        }
         if (!storedRole) {
           toast.error(
             "No role found for this account in Firestore. Please contact admin or sign up again."
@@ -269,6 +290,7 @@ export default function Auth() {
           return;
         }
 
+        markSessionLoggedIn();
         toast.success("Signed in successfully!");
         navigate(from || ROLE_ROUTES[selectedRole], { replace: true });
       }

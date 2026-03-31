@@ -25,6 +25,7 @@ interface Patient {
     primaryConcern?: string;
     emergencyContactName?: string;
     emergencyContactPhone?: string;
+    photoURL?: string;
     lastVisit?: Date;
     nextAppointment?: Date;
     status?: "active" | "inactive";
@@ -62,6 +63,7 @@ export default function DoctorPatients() {
                     primaryConcern: u.primaryConcern || u.patientProfile?.primaryConcern || "",
                     emergencyContactName: u.emergencyContactName || u.patientProfile?.emergencyContactName || "",
                     emergencyContactPhone: u.emergencyContactPhone || u.patientProfile?.emergencyContactPhone || "",
+                    photoURL: u.photoURL || u.photoUrl || "",
                     status: u.status || "active",
                 }));
                 setPatients(normalized);
@@ -85,6 +87,7 @@ export default function DoctorPatients() {
                         primaryConcern: u.primaryConcern || u.patientProfile?.primaryConcern || "",
                         emergencyContactName: u.emergencyContactName || u.patientProfile?.emergencyContactName || "",
                         emergencyContactPhone: u.emergencyContactPhone || u.patientProfile?.emergencyContactPhone || "",
+                        photoURL: u.photoURL || u.photoUrl || "",
                         status: u.status || "active",
                     }));
                     setPatients(normalized);
@@ -135,71 +138,71 @@ export default function DoctorPatients() {
                 <nav className="space-y-2">
                     <Button
                         variant="ghost"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                         onClick={() => navigate("/doctor")}
                     >
                         <LayoutDashboard className="w-4 h-4" />
-                        Dashboard
+                        <span className="sidebar-label">Dashboard</span>
                     </Button>
                     <Button
                         variant="secondary"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                     >
                         <Users className="w-4 h-4" />
-                        Patients
+                        <span className="sidebar-label">Patients</span>
                     </Button>
                     <Button
                         variant="ghost"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                         onClick={() => navigate("/doctor/appointments")}
                     >
                         <CalendarIcon className="w-4 h-4" />
-                        Appointments
+                        <span className="sidebar-label">Appointments</span>
                     </Button>
                     <Button
                         variant="ghost"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                         onClick={() => navigate("/doctor/messages")}
                     >
                         <MessageSquare className="w-4 h-4" />
-                        Messages
+                        <span className="sidebar-label">Messages</span>
                     </Button>
                     <Button
                         variant="ghost"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                         onClick={() => navigate("/doctor/reports")}
                     >
                         <FileText className="w-4 h-4" />
-                        Reports
+                        <span className="sidebar-label">Reports</span>
                     </Button>
                     <Button
                         variant="ghost"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                         onClick={() => navigate("/doctor/analytics")}
                     >
                         <BarChart3 className="w-4 h-4" />
-                        Analytics
+                        <span className="sidebar-label">Analytics</span>
                     </Button>
                     <Button
                         variant="ghost"
-                        className="w-full justify-start gap-3"
-                        onClick={() => navigate("/doctor/profile")}
+                        className="sidebar-item w-full justify-start gap-3"
+                        onClick={() => navigate("/doctor/settings")}
                     >
                         <Settings className="w-4 h-4" />
-                        Settings
+                        <span className="sidebar-label">Settings</span>
                     </Button>
                 </nav>
                 <div className="mt-auto pt-8">
                     <Button
                         variant="outline"
-                        className="w-full justify-start gap-3"
+                        className="sidebar-item w-full justify-start gap-3"
                         onClick={() => {
                             auth.signOut();
                             navigate("/auth");
                         }}
                     >
                         <span className="text-sm">🚪</span>
-                        Logout
+                        <span className="sidebar-label">Logout</span>
                     </Button>
                 </div>
             </aside>
@@ -302,6 +305,13 @@ export default function DoctorPatients() {
                                             onClick={() => setSelectedPatient(patient)}
                                         >
                                             <div className="flex items-start justify-between gap-3">
+                                                <div className="w-10 h-10 rounded-full overflow-hidden bg-muted flex items-center justify-center shrink-0">
+                                                    {patient.photoURL ? (
+                                                        <img src={patient.photoURL} alt={patient.name} className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <Users className="w-5 h-5 text-muted-foreground" />
+                                                    )}
+                                                </div>
                                                 <div className="space-y-1 flex-1">
                                                     <div className="flex items-center gap-2">
                                                         <p className="font-semibold">{patient.name}</p>
@@ -362,9 +372,18 @@ export default function DoctorPatients() {
                             <CardContent>
                                 {selectedPatient ? (
                                     <div className="space-y-4">
-                                        <div>
-                                            <h3 className="font-semibold text-lg">{selectedPatient.name}</h3>
-                                            <p className="text-sm text-muted-foreground">{selectedPatient.email}</p>
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-14 h-14 rounded-full overflow-hidden bg-muted flex items-center justify-center">
+                                                {selectedPatient.photoURL ? (
+                                                    <img src={selectedPatient.photoURL} alt={selectedPatient.name} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <Users className="w-6 h-6 text-muted-foreground" />
+                                                )}
+                                            </div>
+                                            <div>
+                                                <h3 className="font-semibold text-lg">{selectedPatient.name}</h3>
+                                                <p className="text-sm text-muted-foreground">{selectedPatient.email}</p>
+                                            </div>
                                         </div>
 
                                         <div className="space-y-3 pt-4 border-t">

@@ -242,33 +242,33 @@ export default function DoctorReports() {
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block overflow-y-auto">
                 <Logo className="mb-8" />
                 <nav className="space-y-2">
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
+                    <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
                         <LayoutDashboard className="w-4 h-4" />
-                        Dashboard
+                        <span className="sidebar-label">Dashboard</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
+                    <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
                         <Users className="w-4 h-4" />
-                        Patients
+                        <span className="sidebar-label">Patients</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
+                    <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
                         <CalendarIcon className="w-4 h-4" />
-                        Appointments
+                        <span className="sidebar-label">Appointments</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+                    <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
                         <MessageSquare className="w-4 h-4" />
-                        Messages
+                        <span className="sidebar-label">Messages</span>
                     </Button>
-                    <Button variant="secondary" className="w-full justify-start gap-3">
+                    <Button variant="secondary" className="sidebar-item w-full justify-start gap-3">
                         <FileText className="w-4 h-4" />
-                        Reports
+                        <span className="sidebar-label">Reports</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
+                    <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
                         <BarChart3 className="w-4 h-4" />
-                        Analytics
+                        <span className="sidebar-label">Analytics</span>
                     </Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/profile")}>
+                    <Button variant="ghost" className="sidebar-item w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
                         <Settings className="w-4 h-4" />
-                        Settings
+                        <span className="sidebar-label">Settings</span>
                     </Button>
                 </nav>
                 <div className="mt-auto pt-8">

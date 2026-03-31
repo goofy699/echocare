@@ -12,6 +12,8 @@ import {
     getDoc,
     getDocs,
     increment,
+    updateDoc,
+    arrayUnion,
 } from "firebase/firestore";
 import { auth, db } from "@/firebase";
 
@@ -60,7 +62,8 @@ export async function sendMessage(
     chatId: string,
     senderId: string,
     text: string,
-    attachment?: ChatAttachment
+    attachment?: ChatAttachment,
+    options?: { senderRole?: "patient" | "doctor" | "caregiver" }
 ) {
     const hasText = !!text?.trim();
     if (!hasText && !attachment) return;
@@ -77,6 +80,7 @@ export async function sendMessage(
 
     const isDoctor = chatData.doctorId === senderId;
     const isPatient = chatData.patientId === senderId;
+    const senderRole = options?.senderRole || (isDoctor ? "doctor" : isPatient ? "patient" : "caregiver");
 
     const messagesRef = collection(db, coll, chatId, "messages");
     const trimmedText = text?.trim() || "";
@@ -85,7 +89,8 @@ export async function sendMessage(
         text: trimmedText,
         ...(attachment ? { attachment } : {}),
         createdAt: serverTimestamp(),
-        senderRole: isDoctor ? "doctor" : "patient",
+        senderRole,
+        seenBy: [senderId],
     });
 
     const fallbackMessage = attachment
@@ -286,7 +291,7 @@ export async function listPatientsForDoctor(doctorId: string) {
         if (p.assignedDoctorId) return p.assignedDoctorId === doctorId;
         if (p.doctorId) return p.doctorId === doctorId;
         if (Array.isArray(p.assignedDoctors)) return p.assignedDoctors.includes(doctorId);
-        return true;
+        return false;
     });
 }
 
@@ -354,9 +359,7 @@ export function listenPatientsForDoctor(doctorId: string, callback: (docs: any[]
                         return false;
                     });
 
-                    const candidates = all.filter(isPatientCandidate);
-                    const result = assigned.length > 0 ? assigned : candidates;
-                    callback(result);
+                    callback(assigned);
                 } catch (innerErr) {
                     console.error("listenPatientsForDoctor processing error:", innerErr);
                     callback([]);
@@ -421,7 +424,7 @@ export function listenCaregiverPatients(caregiverId: string, callback: (docs: an
                     if (p.assignedCaregiverId) return p.assignedCaregiverId === caregiverId;
                     if (p.caregiverId) return p.caregiverId === caregiverId;
                     if (Array.isArray(p.assignedCaregivers)) return p.assignedCaregivers.includes(caregiverId);
-                    return true;
+                    return false;
                 });
 
                 callback(linked);
@@ -464,4 +467,25 @@ export function listenChatsByParticipant(userId: string, callback: (chats: any[]
         callback([]);
         return () => { };
     }
+}
+
+export async function markMessagesSeen(chatId: string, viewerId: string) {
+    const coll = await findChatCollection(chatId);
+    const messagesRef = collection(db, coll, chatId, "messages");
+    const q = query(messagesRef, where("senderId", "!=", viewerId));
+    const snapshot = await getDocs(q);
+
+    const updates = snapshot.docs.filter((d) => {
+        const data: any = d.data();
+        const seenBy = data?.seenBy || [];
+        return !seenBy.includes(viewerId);
+    });
+
+    await Promise.all(
+        updates.map((d) =>
+            updateDoc(d.ref, {
+                seenBy: arrayUnion(viewerId),
+            })
+        )
+    );
 }
