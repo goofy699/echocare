@@ -1,11 +1,40 @@
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Navbar } from "@/components/Navbar";
-import { MessageSquare, Bell, Stethoscope, HeartPulse, CheckCircle2, Facebook, Twitter, Linkedin } from "lucide-react";
+import { Logo } from "@/components/Logo";
+import { MessageSquare, Bell, Stethoscope, HeartPulse, CheckCircle2, Facebook, Twitter, Linkedin, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import doctorHero from "@/assets/doctor-hero.jpg";
 
 export default function Landing() {
+  const [showIntro, setShowIntro] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowIntro(false), 1600);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (showIntro) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 via-cyan-50 to-white">
+        <div className="relative flex flex-col items-center gap-6 px-6 py-10 text-center">
+          <div className="absolute inset-0 blur-3xl opacity-40 bg-[radial-gradient(circle_at_30%_20%,hsl(var(--primary)/0.18),transparent_45%),radial-gradient(circle_at_70%_80%,hsl(var(--primary)/0.12),transparent_35%)]" />
+          <div className="relative">
+            <div className="mx-auto w-28 h-28 rounded-3xl bg-white shadow-2xl shadow-emerald-200/50 border border-primary/10 flex items-center justify-center">
+              <Logo iconClassName="w-20 h-20" hideText />
+            </div>
+          </div>
+          <div className="relative space-y-2">
+            <p className="text-lg font-semibold text-foreground">Welcome to EchoCare</p>
+            <p className="text-sm text-muted-foreground">Loading your care experience…</p>
+          </div>
+          <Loader2 className="relative w-6 h-6 text-primary animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Navbar />
