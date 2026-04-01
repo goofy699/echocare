@@ -43,6 +43,23 @@ service cloud.firestore {
       }
     }
 
+    // Shift tracking for doctors
+    match /doctorShifts/{shiftId} {
+      allow create: if signedIn() && request.resource.data.doctorId == request.auth.uid;
+      allow read: if signedIn() && (resource.data.doctorId == request.auth.uid || isAdmin());
+      allow update: if signedIn() && (resource.data.doctorId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Shift tracking for caregivers
+    // Allow reads for any signed-in user so admin dashboards can stream caregiver activity in real time
+    match /caregiverShifts/{shiftId} {
+      allow create: if signedIn() && request.resource.data.caregiverId == request.auth.uid;
+      allow read: if signedIn();
+      allow update: if signedIn() && (resource.data.caregiverId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
     // Appointments: patients can create and manage their own bookings.
     // Doctors can read/update/delete appointments assigned to them.
     // Caregivers and admins can view/manage appointments for care coordination.
@@ -173,6 +190,18 @@ service cloud.firestore {
       );
 
       allow delete: if isAdmin();
+    }
+
+    // Doctor shifts: doctors clock in/out; visible to authenticated users
+    match /doctorShifts/{shiftId} {
+      allow create: if signedIn()
+                    && request.resource.data.doctorId == request.auth.uid
+                    && request.resource.data.status in ['open', 'closed'];
+
+      allow read: if signedIn();
+
+      allow update: if signedIn()
+                    && resource.data.doctorId == request.auth.uid;
     }
 
     // Deny everything else by default
