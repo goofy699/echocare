@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { auth, db } from "@/firebase";
-import { collection, doc, onSnapshot } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, serverTimestamp, addDoc, updateDoc, query, where, getDocs, limit, orderBy } from "firebase/firestore";
+import { format } from "date-fns";
 import { listenAppointmentsForCaregiver } from "@/services/appointments";
+import { useAppointmentNotifications } from "@/hooks/useAppointmentNotifications";
 import { createChat, listenCaregiverPatients, listenChatsByParticipant, listenToMessages, listenUsersByRole, sendMessage, uploadChatAttachment } from "@/services/chat";
 import { listenSosAlertsForCaregiver, SosAlert } from "@/services/sos";
 import { Button } from "@/components/ui/button";
@@ -18,6 +20,7 @@ export default function CaregiverDashboard() {
     const user = auth.currentUser;
     const caregiverId = user?.uid;
     const [caregiverName, setCaregiverName] = useState(user?.displayName || user?.email || "Caregiver");
+    const { upcomingCount: appointmentNotifCount } = useAppointmentNotifications({ role: "caregiver", userId: caregiverId || undefined });
 
     const [patients, setPatients] = useState<any[]>([]);
     const [appointments, setAppointments] = useState<any[]>([]);
@@ -26,6 +29,13 @@ export default function CaregiverDashboard() {
     const [doctors, setDoctors] = useState<any[]>([]);
     const [sosAlerts, setSosAlerts] = useState<SosAlert[]>([]);
     const [showAlertsPanel, setShowAlertsPanel] = useState(false);
+
+    const [isAvailable, setIsAvailable] = useState(true);
+    const [availabilitySaving, setAvailabilitySaving] = useState(false);
+    const [shiftActive, setShiftActive] = useState(false);
+    const [shiftStart, setShiftStart] = useState<Date | null>(null);
+    const [shiftSaving, setShiftSaving] = useState(false);
+    const [shiftHistory, setShiftHistory] = useState<any[]>([]);
 
     const [showMiniChat, setShowMiniChat] = useState(false);
     const [showAiDummy, setShowAiDummy] = useState(false);
@@ -52,6 +62,15 @@ export default function CaregiverDashboard() {
         const unUser = onSnapshot(doc(db, "users", caregiverId), (snap) => {
             const data = snap.data() as any;
             setCaregiverName(data?.name || data?.displayName || user?.displayName || user?.email || "Caregiver");
+            const availability = data?.availability;
+            setIsAvailable(availability !== "unavailable");
+            if (data?.currentShiftStartedAt?.toDate) {
+                setShiftStart(data.currentShiftStartedAt.toDate());
+                setShiftActive(true);
+            } else {
+                setShiftStart(null);
+                setShiftActive(false);
+            }
         });
 
         const unPatients = listenCaregiverPatients(caregiverId, setPatients);
@@ -83,11 +102,39 @@ export default function CaregiverDashboard() {
         };
     }, [caregiverId, user?.displayName, user?.email]);
 
+    useEffect(() => {
+        if (!caregiverId) return;
+
+        const q = query(
+            collection(db, "caregiverShifts"),
+            where("caregiverId", "==", caregiverId),
+            orderBy("startAt", "desc"),
+            limit(20)
+        );
+
+        const unsub = onSnapshot(q, (snap) => {
+            const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+            setShiftHistory(list);
+            const open = list.find((s) => s.status === "open");
+            if (open?.startAt?.toDate) {
+                setShiftStart(open.startAt.toDate());
+                setShiftActive(true);
+                setIsAvailable(true);
+            } else {
+                setShiftStart(null);
+                setShiftActive(false);
+            }
+        });
+
+        return () => unsub();
+    }, [caregiverId]);
+
     const isReportMessage = (text?: string) => typeof text === "string" && text.trim().startsWith("[REPORT]");
 
     const miniContacts = miniRole === "patient" ? patients : doctors;
 
     const activeAlerts = useMemo(() => sosAlerts.filter((a) => (a.status || "active") === "active"), [sosAlerts]);
+    const notificationBadgeCount = (appointmentNotifCount || 0) + activeAlerts.length;
 
     useEffect(() => {
         if (!miniActiveContact && miniContacts.length > 0) {
@@ -238,6 +285,131 @@ export default function CaregiverDashboard() {
 
     const recentChats = useMemo(() => chats.slice(0, 5), [chats]);
 
+    const toggleAvailability = async (next: boolean) => {
+        if (!caregiverId) return;
+
+        // Keep availability in sync with shift state: online == on-duty, offline == off-duty
+        if (next) {
+            if (shiftActive) {
+                setIsAvailable(true);
+                setAvailabilitySaving(true);
+                try {
+                    await setDoc(
+                        doc(db, "users", caregiverId),
+                        {
+                            availability: "available",
+                            availabilityUpdatedAt: serverTimestamp(),
+                            shiftStatus: "on-duty",
+                        },
+                        { merge: true }
+                    );
+                } catch (error) {
+                    console.error("Failed to update caregiver availability:", error);
+                } finally {
+                    setAvailabilitySaving(false);
+                }
+            } else {
+                await startShift();
+            }
+        } else {
+            if (shiftActive) {
+                await endShift();
+            } else {
+                setIsAvailable(false);
+                setAvailabilitySaving(true);
+                try {
+                    await setDoc(
+                        doc(db, "users", caregiverId),
+                        {
+                            availability: "unavailable",
+                            availabilityUpdatedAt: serverTimestamp(),
+                            shiftStatus: "off-duty",
+                        },
+                        { merge: true }
+                    );
+                } catch (error) {
+                    console.error("Failed to update caregiver availability:", error);
+                } finally {
+                    setAvailabilitySaving(false);
+                }
+            }
+        }
+    };
+
+    const startShift = async () => {
+        if (!caregiverId || shiftSaving) return;
+        setShiftSaving(true);
+        try {
+            const now = new Date();
+            setShiftActive(true);
+            setShiftStart(now);
+            setIsAvailable(true);
+            await addDoc(collection(db, "caregiverShifts"), {
+                caregiverId,
+                status: "open",
+                startAt: serverTimestamp(),
+                endAt: null,
+                createdAt: serverTimestamp(),
+            });
+
+            await setDoc(
+                doc(db, "users", caregiverId),
+                {
+                    availability: "available",
+                    availabilityUpdatedAt: serverTimestamp(),
+                    currentShiftStartedAt: serverTimestamp(),
+                    shiftStatus: "on-duty",
+                },
+                { merge: true }
+            );
+        } catch (error) {
+            console.error("caregiver start shift failed", error);
+        } finally {
+            setShiftSaving(false);
+        }
+    };
+
+    const endShift = async () => {
+        if (!caregiverId || shiftSaving) return;
+        setShiftSaving(true);
+        try {
+            setShiftActive(false);
+            setShiftStart(null);
+            setIsAvailable(false);
+            const q = query(
+                collection(db, "caregiverShifts"),
+                where("caregiverId", "==", caregiverId),
+                where("status", "==", "open"),
+                limit(1)
+            );
+            const snap = await getDocs(q);
+            const openShift = snap.docs[0];
+
+            if (openShift) {
+                await updateDoc(openShift.ref, {
+                    status: "closed",
+                    endAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                });
+            }
+
+            await setDoc(
+                doc(db, "users", caregiverId),
+                {
+                    availability: "unavailable",
+                    availabilityUpdatedAt: serverTimestamp(),
+                    currentShiftStartedAt: null,
+                    shiftStatus: "off-duty",
+                },
+                { merge: true }
+            );
+        } catch (error) {
+            console.error("caregiver end shift failed", error);
+        } finally {
+            setShiftSaving(false);
+        }
+    };
+
     return (
         <div className="min-h-screen bg-background flex">
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block overflow-y-auto">
@@ -285,19 +457,51 @@ export default function CaregiverDashboard() {
 
             <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
                 <div className="max-w-7xl mx-auto space-y-6">
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div className="flex flex-col lg:flex-row justify-between gap-4 lg:items-center">
                         <div>
                             <h1 className="text-2xl sm:text-3xl font-bold">Welcome Back, {caregiverName}!</h1>
                             <p className="text-muted-foreground">Real patient tracking, reminders, appointments, and messages.</p>
                         </div>
-                        <Button size="icon" variant="ghost" className="relative" onClick={() => setShowAlertsPanel((v) => !v)}>
-                            <Bell className="w-5 h-5" />
-                            {activeAlerts.length > 0 && (
-                                <span className="absolute -top-1 -right-1 h-5 min-w-[20px] rounded-full bg-destructive text-[11px] text-destructive-foreground flex items-center justify-center px-1 leading-none">
-                                    {activeAlerts.length}
+
+                        <div className="flex items-center gap-3">
+                            <div className={`hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg ${isAvailable ? "bg-success/10" : "bg-muted"}`}>
+                                <div className={`w-2 h-2 rounded-full ${isAvailable ? "bg-success animate-pulse" : "bg-muted-foreground"}`}></div>
+                                <span className={`text-sm font-medium ${isAvailable ? "text-success" : "text-muted-foreground"}`}>
+                                    {isAvailable ? "Available" : "Unavailable"}
                                 </span>
-                            )}
-                        </Button>
+                                <CheckCircle className={`w-4 h-4 ${isAvailable ? "text-success" : "text-muted-foreground"}`} />
+                                <Button
+                                    size="sm"
+                                    variant={isAvailable ? "secondary" : "outline"}
+                                    disabled={availabilitySaving}
+                                    onClick={() => toggleAvailability(!isAvailable)}
+                                >
+                                    {isAvailable ? "Go Offline" : "Go Online"}
+                                </Button>
+                            </div>
+
+                            <div className="hidden sm:flex flex-col items-end text-right">
+                                <p className="text-xs text-muted-foreground">Shift</p>
+                                <div className="flex items-center gap-2">
+                                    <Badge variant={shiftActive ? "default" : "outline"}>
+                                        {shiftActive ? "On Duty" : "Off Duty"}
+                                    </Badge>
+                                    {shiftStart && <span className="text-xs text-muted-foreground">since {format(shiftStart, "p")}</span>}
+                                    <Button size="sm" variant={shiftActive ? "outline" : "secondary"} onClick={shiftActive ? endShift : startShift} disabled={shiftSaving}>
+                                        {shiftActive ? "Clock Out" : "Clock In"}
+                                    </Button>
+                                </div>
+                            </div>
+
+                            <Button size="icon" variant="ghost" className="relative" onClick={() => setShowAlertsPanel((v) => !v)}>
+                                <Bell className="w-5 h-5" />
+                                {notificationBadgeCount > 0 && (
+                                    <span className="absolute -top-1 -right-1 h-5 min-w-[20px] rounded-full bg-destructive text-[11px] text-destructive-foreground flex items-center justify-center px-1 leading-none">
+                                        {notificationBadgeCount}
+                                    </span>
+                                )}
+                            </Button>
+                        </div>
                     </div>
 
                     {showAlertsPanel && (
@@ -348,6 +552,37 @@ export default function CaregiverDashboard() {
                             <CardContent><p className="text-3xl font-bold">{upcomingAppointments.length}</p></CardContent>
                         </Card>
                     </div>
+
+                    <Card>
+                        <CardHeader>
+                            <div className="flex items-center justify-between">
+                                <CardTitle>Shift History</CardTitle>
+                                <Badge variant={shiftActive ? "default" : "outline"}>{shiftActive ? "On Duty" : "Off Duty"}</Badge>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                            {shiftHistory.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No recorded shifts yet.</p>
+                            ) : (
+                                shiftHistory.map((shift) => {
+                                    const startedAt = shift.startAt?.toDate ? shift.startAt.toDate() : null;
+                                    const endedAt = shift.endAt?.toDate ? shift.endAt.toDate() : null;
+                                    return (
+                                        <div key={shift.id} className="flex items-center justify-between border rounded-lg p-3">
+                                            <div className="flex flex-col">
+                                                <span className="text-sm font-medium">{shift.status === "open" ? "In Progress" : "Completed"}</span>
+                                                <span className="text-xs text-muted-foreground">
+                                                    {startedAt ? `${format(startedAt, "MMM d, p")}` : "Start unknown"}
+                                                    {endedAt ? ` • Ended ${format(endedAt, "p")}` : shift.status === "open" ? " • Ongoing" : ""}
+                                                </span>
+                                            </div>
+                                            <Badge variant={shift.status === "open" ? "outline" : "secondary"}>{shift.status === "open" ? "Open" : "Closed"}</Badge>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </CardContent>
+                    </Card>
 
                     <Card>
                         <CardHeader><CardTitle>Tracked Patients</CardTitle></CardHeader>

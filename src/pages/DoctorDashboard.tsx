@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { auth, db } from "@/firebase";
 import { createChat, listenPatientsForDoctor, listenToMessages, sendMessage, uploadChatAttachment } from "../services/chat";
 import { listenAppointmentsByDoctor } from "@/services/appointments";
-import { doc, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
+import { addDoc, collection, doc, getDocs, limit, onSnapshot, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,10 @@ export default function DoctorDashboard() {
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [isAvailable, setIsAvailable] = useState(true);
   const [availabilitySaving, setAvailabilitySaving] = useState(false);
+  const [shiftActive, setShiftActive] = useState(false);
+  const [shiftStart, setShiftStart] = useState<Date | null>(null);
+  const [shiftSaving, setShiftSaving] = useState(false);
+  const [shiftHistory, setShiftHistory] = useState<any[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<any | null>(null);
   const [showMiniChat, setShowMiniChat] = useState(false);
   const [showAiDummy, setShowAiDummy] = useState(false);
@@ -64,30 +68,167 @@ export default function DoctorDashboard() {
       const availability = data?.availability;
       setDoctorName(data?.name || data?.displayName || auth.currentUser?.displayName || auth.currentUser?.email || "Doctor");
       setIsAvailable(availability !== "unavailable");
+      if (data?.currentShiftStartedAt?.toDate) {
+        setShiftStart(data.currentShiftStartedAt.toDate());
+        setShiftActive(true);
+      } else {
+        setShiftStart(null);
+        setShiftActive(false);
+      }
     });
 
     return () => unsubscribe();
   }, [doctorId]);
 
+  useEffect(() => {
+    if (!doctorId) return;
+
+    const q = query(
+      collection(db, "doctorShifts"),
+      where("doctorId", "==", doctorId),
+      orderBy("startAt", "desc"),
+      limit(20)
+    );
+
+    const unsub = onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      setShiftHistory(list);
+      const open = list.find((s) => s.status === "open");
+      if (open?.startAt?.toDate) {
+        setShiftStart(open.startAt.toDate());
+        setShiftActive(true);
+        setIsAvailable(true);
+      } else {
+        setShiftStart(null);
+        setShiftActive(false);
+      }
+    });
+
+    return () => unsub();
+  }, [doctorId]);
+
   const toggleAvailability = async (next: boolean) => {
     if (!doctorId) return;
 
-    setIsAvailable(next);
-    setAvailabilitySaving(true);
+    // Online == on-duty; offline == off-duty
+    if (next) {
+      if (shiftActive) {
+        setIsAvailable(true);
+        setAvailabilitySaving(true);
+        try {
+          await setDoc(
+            doc(db, "users", doctorId),
+            {
+              availability: "available",
+              availabilityUpdatedAt: serverTimestamp(),
+              shiftStatus: "on-duty",
+            },
+            { merge: true }
+          );
+        } catch (error) {
+          console.error("Failed to update doctor availability:", error);
+        } finally {
+          setAvailabilitySaving(false);
+        }
+      } else {
+        await startShift();
+      }
+    } else {
+      if (shiftActive) {
+        await endShift();
+      } else {
+        setIsAvailable(false);
+        setAvailabilitySaving(true);
+        try {
+          await setDoc(
+            doc(db, "users", doctorId),
+            {
+              availability: "unavailable",
+              availabilityUpdatedAt: serverTimestamp(),
+              shiftStatus: "off-duty",
+            },
+            { merge: true }
+          );
+        } catch (error) {
+          console.error("Failed to update doctor availability:", error);
+        } finally {
+          setAvailabilitySaving(false);
+        }
+      }
+    }
+  };
+
+  const startShift = async () => {
+    if (!doctorId || shiftSaving) return;
+    setShiftSaving(true);
     try {
+      const now = new Date();
+      setShiftActive(true);
+      setShiftStart(now);
+      setIsAvailable(true);
+      await addDoc(collection(db, "doctorShifts"), {
+        doctorId,
+        status: "open",
+        startAt: serverTimestamp(),
+        endAt: null,
+        createdAt: serverTimestamp(),
+      });
+
       await setDoc(
         doc(db, "users", doctorId),
         {
-          availability: next ? "available" : "unavailable",
+          availability: "available",
           availabilityUpdatedAt: serverTimestamp(),
+          currentShiftStartedAt: serverTimestamp(),
+          shiftStatus: "on-duty",
         },
         { merge: true }
       );
     } catch (error) {
-      console.error("Failed to update doctor availability:", error);
-      setIsAvailable(!next);
+      console.error("start shift failed", error);
     } finally {
-      setAvailabilitySaving(false);
+      setShiftSaving(false);
+    }
+  };
+
+  const endShift = async () => {
+    if (!doctorId || shiftSaving) return;
+    setShiftSaving(true);
+    try {
+      setShiftActive(false);
+      setShiftStart(null);
+      setIsAvailable(false);
+      const q = query(
+        collection(db, "doctorShifts"),
+        where("doctorId", "==", doctorId),
+        where("status", "==", "open"),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      const openShift = snap.docs[0];
+
+      if (openShift) {
+        await updateDoc(openShift.ref, {
+          status: "closed",
+          endAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      await setDoc(
+        doc(db, "users", doctorId),
+        {
+          availability: "unavailable",
+          availabilityUpdatedAt: serverTimestamp(),
+          currentShiftStartedAt: null,
+          shiftStatus: "off-duty",
+        },
+        { merge: true }
+      );
+    } catch (error) {
+      console.error("end shift failed", error);
+    } finally {
+      setShiftSaving(false);
     }
   };
 
@@ -296,6 +437,18 @@ export default function DoctorDashboard() {
                   aria-label="Toggle doctor availability"
                 />
               </div>
+              <div className="hidden sm:flex flex-col items-end text-right">
+                <p className="text-xs text-muted-foreground">Shift</p>
+                <div className="flex items-center gap-2">
+                  <Badge variant={shiftActive ? "default" : "outline"}>
+                    {shiftActive ? "On Duty" : "Off Duty"}
+                  </Badge>
+                  {shiftStart && <span className="text-xs text-muted-foreground">since {format(shiftStart, "p")}</span>}
+                  <Button size="sm" variant={shiftActive ? "outline" : "secondary"} onClick={shiftActive ? endShift : startShift} disabled={shiftSaving}>
+                    {shiftActive ? "Clock Out" : "Clock In"}
+                  </Button>
+                </div>
+              </div>
               <Button size="icon" variant="ghost">
                 <Bell className="w-5 h-5" />
               </Button>
@@ -420,6 +573,38 @@ export default function DoctorDashboard() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Shift History */}
+          <Card className="mb-12">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Shift History</CardTitle>
+                <Badge variant={shiftActive ? "default" : "outline"}>{shiftActive ? "On Duty" : "Off Duty"}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {shiftHistory.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No recorded shifts yet.</p>
+              ) : (
+                shiftHistory.map((shift) => {
+                  const startedAt = shift.startAt?.toDate ? shift.startAt.toDate() : null;
+                  const endedAt = shift.endAt?.toDate ? shift.endAt.toDate() : null;
+                  return (
+                    <div key={shift.id} className="flex items-center justify-between border rounded-lg p-3">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-medium">{shift.status === "open" ? "In Progress" : "Completed"}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {startedAt ? `${format(startedAt, "MMM d, p")}` : "Start unknown"}
+                          {endedAt ? ` • Ended ${format(endedAt, "p")}` : shift.status === "open" ? " • Ongoing" : ""}
+                        </span>
+                      </div>
+                      <Badge variant={shift.status === "open" ? "outline" : "secondary"}>{shift.status === "open" ? "Open" : "Closed"}</Badge>
+                    </div>
+                  );
+                })
+              )}
+            </CardContent>
+          </Card>
 
         </div>
       </main>
