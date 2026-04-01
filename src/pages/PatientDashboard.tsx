@@ -38,11 +38,13 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { useReminderNotifications } from "@/hooks/useReminderNotifications";
+import { useAppointmentNotifications } from "@/hooks/useAppointmentNotifications";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 export default function PatientDashboard() {
-  useReminderNotifications();
+  const { dueSoonCount } = useReminderNotifications();
+  const { upcomingCount: appointmentNotifCount } = useAppointmentNotifications({ role: "patient", userId: auth.currentUser?.uid || undefined });
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -58,6 +60,7 @@ export default function PatientDashboard() {
   const [upcomingAppointments, setUpcomingAppointments] = useState<AppointmentRecord[]>([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(true);
   const graceMs = 5 * 60 * 1000; // five-minute grace window
+  const notificationBadgeCount = (dueSoonCount || 0) + (appointmentNotifCount || 0);
   const [quickNoteTitle, setQuickNoteTitle] = useState("");
   const [quickNoteContent, setQuickNoteContent] = useState("");
   const [savingQuickNote, setSavingQuickNote] = useState(false);
@@ -403,8 +406,13 @@ export default function PatientDashboard() {
             </Sheet>
             <span className="font-semibold text-sm">Dashboard</span>
           </div>
-          <Button size="icon" variant="ghost">
+          <Button size="icon" variant="ghost" className="relative">
             <Bell className="w-5 h-5" />
+            {notificationBadgeCount > 0 && (
+              <span className="absolute -top-1 -right-1 h-5 min-w-[20px] rounded-full bg-destructive text-[11px] text-destructive-foreground flex items-center justify-center px-1 leading-none">
+                {notificationBadgeCount}
+              </span>
+            )}
           </Button>
         </header>
 

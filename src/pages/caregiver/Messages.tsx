@@ -34,7 +34,13 @@ export default function CaregiverMessages() {
 
     const displayName = (item: any) => item?.name || item?.displayName || item?.email || item?.id || "Unknown";
 
-    const displaySub = (item: any) => item?.email || (mode === "patients" ? "Patient" : "Doctor");
+    const displaySub = (item: any) => {
+        if (mode === "doctors") {
+            const status = item?.availability === "available" ? "On shift" : "Off shift";
+            return status;
+        }
+        return item?.email || "Patient";
+    };
 
     const isReportMessage = (text?: string) => typeof text === "string" && text.trim().startsWith("[REPORT]");
 
