@@ -15,5 +15,5 @@
   "compileOnSave": true,
   "include": [
     "src"
-  ]
+, "../src/i18n.ts"  ]
 }

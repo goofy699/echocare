@@ -1,10 +1,16 @@
 import * as admin from "firebase-admin";
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onCall, HttpsError, onRequest } from "firebase-functions/v2/https";
+import {
+    getFirestore,
+    FieldValue,
+    Timestamp,
+    QuerySnapshot,
+} from "firebase-admin/firestore";
 import * as crypto from "crypto";
 import nodemailer from "nodemailer";
 
 admin.initializeApp();
-const db = admin.firestore();
+const db = getFirestore();
 
 /* =========================
    Helpers
@@ -23,22 +29,41 @@ function assertRole(role: any): asserts role is Role {
 }
 
 async function requireAdmin(uid: string | undefined) {
-    if (!uid) throw new HttpsError("unauthenticated", "Not signed in.");
+    if (!uid) {
+        throw new HttpsError("unauthenticated", "Not signed in.");
+    }
+
     const callerDoc = await db.collection("users").doc(uid).get();
     const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+
     if (callerRole !== "admin") {
         throw new HttpsError("permission-denied", "Admin access required.");
     }
 }
 
-async function writeAdminAudit(action: string, adminUid: string, targetUid: string, details?: Record<string, any>) {
+async function writeAdminAudit(
+    action: string,
+    adminUid: string,
+    targetUid: string,
+    details?: Record<string, any>
+) {
     await db.collection("adminActivity").add({
         action,
         adminUid,
         targetUid,
         ...(details ? { details } : {}),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
     });
+}
+
+function setCors(res: any, reqOrigin?: string) {
+    const origin = reqOrigin || "*";
+
+    res.set("Access-Control-Allow-Origin", origin);
+    res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.set("Access-Control-Allow-Credentials", "true");
+    res.set("Vary", "Origin");
 }
 
 /* =========================
@@ -48,10 +73,11 @@ async function writeAdminAudit(action: string, adminUid: string, targetUid: stri
 const MAIL_USER = process.env.MAIL_USER;
 const MAIL_PASS = process.env.MAIL_PASS;
 
-// In emulator/dev mode, allow missing mail credentials and use a no-op transporter
 let transporter: any;
+
 if (!MAIL_USER || !MAIL_PASS) {
     console.warn("MAIL_USER or MAIL_PASS not set; using no-op transporter for local development.");
+
     transporter = {
         sendMail: async (opts: any) => {
             console.log("[dev-noop] sendMail called with:", opts);
@@ -85,9 +111,7 @@ export const sendOtp = onCall({ cors: true }, async (request) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const otpHash = sha256(otp);
 
-    const expiresAt = admin.firestore.Timestamp.fromMillis(
-        Date.now() + 10 * 60 * 1000
-    );
+    const expiresAt = Timestamp.fromMillis(Date.now() + 10 * 60 * 1000);
 
     const ref = db.collection("otpRequests").doc();
 
@@ -98,11 +122,11 @@ export const sendOtp = onCall({ cors: true }, async (request) => {
         expiresAt,
         used: false,
         attempts: 0,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
     });
 
     await transporter.sendMail({
-        from: `EchoCare <${MAIL_USER}>`,
+        from: `EchoCare <${MAIL_USER || "no-reply@echocare.local"}>`,
         to: email,
         subject: "EchoCare Verification Code",
         text: `Your EchoCare verification code is: ${otp}\n\nThis code expires in 10 minutes.`,
@@ -161,14 +185,15 @@ export const verifyOtpAndCreateUser = onCall({ cors: true }, async (request) => 
 
     if (sha256(otp) !== data.otpHash) {
         await ref.update({
-            attempts: admin.firestore.FieldValue.increment(1),
+            attempts: FieldValue.increment(1),
         });
+
         throw new HttpsError("unauthenticated", "Invalid OTP.");
     }
 
     await ref.update({
         used: true,
-        verifiedAt: admin.firestore.FieldValue.serverTimestamp(),
+        verifiedAt: FieldValue.serverTimestamp(),
     });
 
     let user: admin.auth.UserRecord;
@@ -186,13 +211,15 @@ export const verifyOtpAndCreateUser = onCall({ cors: true }, async (request) => 
                 "Email already registered. Please sign in."
             );
         }
+
+        console.error("verifyOtpAndCreateUser createUser error:", err);
         throw new HttpsError("internal", "Failed to create user.");
     }
 
     await db.collection("users").doc(user.uid).set({
         email,
         role: data.role,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
     });
 
     return {
@@ -203,47 +230,73 @@ export const verifyOtpAndCreateUser = onCall({ cors: true }, async (request) => 
 
 /* =========================
    Admin helpers to list users
-   (onCall functions — keep access controlled)
 ========================= */
 
 export const listDoctors = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
-    if (!auth) throw new HttpsError("unauthenticated", "Not signed in.");
 
-    // return users with role === 'doctor', fall back to all users if none tagged
-    const snap = await db.collection("users").where("role", "==", "doctor").get();
-    let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-    if (docs.length === 0) {
-        const all = await db.collection("users").get();
-        docs = all.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+    if (!auth) {
+        throw new HttpsError("unauthenticated", "Not signed in.");
     }
 
-    return docs.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null }));
+    const snap = await db.collection("users").where("role", "==", "doctor").get();
+
+    let docs = snap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as any),
+    }));
+
+    if (docs.length === 0) {
+        const all = await db.collection("users").get();
+
+        docs = all.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+        }));
+    }
+
+    return docs.map((d: any) => ({
+        id: d.id,
+        name: d.name || d.displayName || d.email || null,
+        role: d.role || null,
+    }));
 });
 
 export const listPatientsForDoctor = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
-    if (!auth) throw new HttpsError("unauthenticated", "Not signed in.");
+
+    if (!auth) {
+        throw new HttpsError("unauthenticated", "Not signed in.");
+    }
 
     const callerId = auth.uid;
 
-    // Ensure caller is allowed: must be doctor or admin
     const callerDoc = await db.collection("users").doc(callerId).get();
     const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+
     if (callerRole !== "doctor" && callerRole !== "admin") {
         throw new HttpsError("permission-denied", "Not authorized to list patients.");
     }
 
     let doctorId = String(request.data?.doctorId || "");
+
     if (!doctorId) {
-        // default to caller if doctor
-        if (callerRole === "doctor") doctorId = callerId;
-        else throw new HttpsError("invalid-argument", "doctorId is required for non-doctor callers.");
+        if (callerRole === "doctor") {
+            doctorId = callerId;
+        } else {
+            throw new HttpsError(
+                "invalid-argument",
+                "doctorId is required for non-doctor callers."
+            );
+        }
     }
 
-    // Query all users and prefer role == patient (or untagged users)
     const allSnap = await db.collection("users").get();
-    const all = allSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+    const all = allSnap.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as any),
+    }));
 
     const isPatientCandidate = (u: any) => (u.role ? u.role === "patient" : true);
 
@@ -257,11 +310,20 @@ export const listPatientsForDoctor = onCall({ cors: true }, async (request) => {
 
     const result = assigned.length > 0 ? assigned : all.filter(isPatientCandidate);
 
-    return result.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: d.role || null }));
+    return result.map((d: any) => ({
+        id: d.id,
+        name: d.name || d.displayName || d.email || null,
+        role: d.role || null,
+    }));
 });
+
+/* =========================
+   ADMIN CREATE USER - CALLABLE
+========================= */
 
 export const adminCreateUser = onCall({ cors: true }, async (request) => {
     const adminUid = request.auth?.uid;
+
     await requireAdmin(adminUid);
 
     const email = String(request.data?.email || "").trim().toLowerCase();
@@ -274,12 +336,16 @@ export const adminCreateUser = onCall({ cors: true }, async (request) => {
     }
 
     if (!password || password.length < 6) {
-        throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+        throw new HttpsError(
+            "invalid-argument",
+            "Password must be at least 6 characters."
+        );
     }
 
     assertRole(role as any);
 
     let user: admin.auth.UserRecord;
+
     try {
         user = await admin.auth().createUser({
             email,
@@ -291,20 +357,28 @@ export const adminCreateUser = onCall({ cors: true }, async (request) => {
         if (error?.code === "auth/email-already-exists") {
             throw new HttpsError("already-exists", "Email already exists.");
         }
+
+        console.error("adminCreateUser createUser error:", error);
         throw new HttpsError("internal", "Failed to create auth user.");
     }
 
-    await db.collection("users").doc(user.uid).set({
+    await db.collection("users").doc(user.uid).set(
+        {
+            email,
+            role,
+            ...(name ? { name } : {}),
+            suspended: false,
+            createdBy: adminUid,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+    );
+
+    await writeAdminAudit("create-user", adminUid!, user.uid, {
         email,
         role,
-        ...(name ? { name } : {}),
-        suspended: false,
-        createdBy: adminUid,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    await writeAdminAudit("create-user", adminUid!, user.uid, { email, role });
+    });
 
     return {
         uid: user.uid,
@@ -313,8 +387,142 @@ export const adminCreateUser = onCall({ cors: true }, async (request) => {
     };
 });
 
+/* =========================
+   ADMIN CREATE USER - HTTP
+========================= */
+
+export const adminCreateUserHttp = onRequest(async (req, res) => {
+    console.log("adminCreateUserHttp called:", req.method, "origin=", req.headers.origin);
+
+    setCors(res, req.headers.origin as string | undefined);
+
+    if (req.method === "OPTIONS") {
+        res.status(204).send("");
+        return;
+    }
+
+    if (req.method !== "POST") {
+        res.status(405).json({ error: "Method not allowed." });
+        return;
+    }
+
+    try {
+        const authHeader = req.headers.authorization || "";
+        const token = authHeader.startsWith("Bearer ")
+            ? authHeader.replace("Bearer ", "")
+            : "";
+
+        if (!token) {
+            res.status(401).json({ error: "Not signed in. Missing token." });
+            return;
+        }
+
+        const decoded = await admin.auth().verifyIdToken(token);
+        const adminUid = decoded.uid;
+
+        const callerDoc = await db.collection("users").doc(adminUid).get();
+        const callerData = callerDoc.exists ? callerDoc.data() : null;
+        const callerRole = callerData?.role;
+
+        console.log("Caller admin check:", {
+            uid: adminUid,
+            email: decoded.email,
+            role: callerRole,
+        });
+
+        if (callerRole !== "admin") {
+            res.status(403).json({
+                error: `Admin access required. Current role is: ${callerRole || "missing"}`,
+            });
+            return;
+        }
+
+        const email = String(req.body?.email || "").trim().toLowerCase();
+        const password = String(req.body?.password || "").trim();
+        const role = String(req.body?.role || "").trim().toLowerCase();
+        const name = String(req.body?.name || "").trim();
+
+        if (!email) {
+            res.status(400).json({ error: "Email is required." });
+            return;
+        }
+
+        if (!password || password.length < 6) {
+            res.status(400).json({ error: "Password must be at least 6 characters." });
+            return;
+        }
+
+        if (!["patient", "doctor", "caregiver", "admin"].includes(role)) {
+            res.status(400).json({ error: "Invalid role." });
+            return;
+        }
+
+        let user: admin.auth.UserRecord;
+
+        try {
+            user = await admin.auth().createUser({
+                email,
+                password,
+                emailVerified: true,
+                displayName: name || undefined,
+            });
+        } catch (error: any) {
+            console.error("adminCreateUserHttp createUser error:", error);
+
+            if (error?.code === "auth/email-already-exists") {
+                res.status(409).json({ error: "Email already exists." });
+                return;
+            }
+
+            res.status(500).json({
+                error: error?.message || "Failed to create Firebase Auth user.",
+                code: error?.code || null,
+            });
+            return;
+        }
+
+        await db.collection("users").doc(user.uid).set(
+            {
+                email,
+                role,
+                ...(name ? { name } : {}),
+                suspended: false,
+                createdBy: adminUid,
+                createdAt: FieldValue.serverTimestamp(),
+                updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+        );
+
+        await writeAdminAudit("create-user", adminUid, user.uid, {
+            email,
+            role,
+        });
+
+        res.status(200).json({
+            uid: user.uid,
+            email,
+            role,
+        });
+        return;
+    } catch (error: any) {
+        console.error("adminCreateUserHttp full error:", error);
+
+        res.status(500).json({
+            error: error?.message || "Internal server error.",
+            code: error?.code || null,
+        });
+        return;
+    }
+});
+
+/* =========================
+   ADMIN USER CONTROLS
+========================= */
+
 export const adminSetUserSuspended = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
+
     await requireAdmin(auth?.uid);
 
     const targetUid = String(request.data?.uid || "").trim();
@@ -326,42 +534,64 @@ export const adminSetUserSuspended = onCall({ cors: true }, async (request) => {
     }
 
     if (auth?.uid === targetUid) {
-        throw new HttpsError("failed-precondition", "You cannot suspend your own account.");
+        throw new HttpsError(
+            "failed-precondition",
+            "You cannot suspend your own account."
+        );
     }
 
-    await admin.auth().updateUser(targetUid, { disabled: suspended });
-
-    await db.collection("users").doc(targetUid).set({
-        suspended,
-        ...(reason ? { suspendedReason: reason } : {}),
-        suspendedBy: auth?.uid,
-        ...(suspended
-            ? { suspendedAt: admin.firestore.FieldValue.serverTimestamp() }
-            : { unsuspendedAt: admin.firestore.FieldValue.serverTimestamp() }),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-
-    await writeAdminAudit(suspended ? "suspend-user" : "unsuspend-user", auth!.uid, targetUid, {
-        ...(reason ? { reason } : {}),
+    await admin.auth().updateUser(targetUid, {
+        disabled: suspended,
     });
 
-    return { uid: targetUid, suspended };
+    await db.collection("users").doc(targetUid).set(
+        {
+            suspended,
+            ...(reason ? { suspendedReason: reason } : {}),
+            suspendedBy: auth?.uid,
+            ...(suspended
+                ? { suspendedAt: FieldValue.serverTimestamp() }
+                : { unsuspendedAt: FieldValue.serverTimestamp() }),
+            updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+    );
+
+    await writeAdminAudit(
+        suspended ? "suspend-user" : "unsuspend-user",
+        auth!.uid,
+        targetUid,
+        {
+            ...(reason ? { reason } : {}),
+        }
+    );
+
+    return {
+        uid: targetUid,
+        suspended,
+    };
 });
 
 export const adminDeleteUser = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
+
     await requireAdmin(auth?.uid);
 
     const targetUid = String(request.data?.uid || "").trim();
+
     if (!targetUid) {
         throw new HttpsError("invalid-argument", "uid is required.");
     }
 
     if (auth?.uid === targetUid) {
-        throw new HttpsError("failed-precondition", "You cannot delete your own account.");
+        throw new HttpsError(
+            "failed-precondition",
+            "You cannot delete your own account."
+        );
     }
 
     let targetEmail = "";
+
     try {
         const record = await admin.auth().getUser(targetUid);
         targetEmail = record.email || "";
@@ -378,13 +608,20 @@ export const adminDeleteUser = onCall({ cors: true }, async (request) => {
     }
 
     await db.collection("users").doc(targetUid).delete();
-    await writeAdminAudit("delete-user", auth!.uid, targetUid, { ...(targetEmail ? { email: targetEmail } : {}) });
 
-    return { uid: targetUid, deleted: true };
+    await writeAdminAudit("delete-user", auth!.uid, targetUid, {
+        ...(targetEmail ? { email: targetEmail } : {}),
+    });
+
+    return {
+        uid: targetUid,
+        deleted: true,
+    };
 });
 
 export const adminSetUserPassword = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
+
     await requireAdmin(auth?.uid);
 
     const targetUid = String(request.data?.uid || "").trim();
@@ -393,42 +630,66 @@ export const adminSetUserPassword = onCall({ cors: true }, async (request) => {
     if (!targetUid) {
         throw new HttpsError("invalid-argument", "uid is required.");
     }
+
     if (!newPassword || newPassword.length < 6) {
-        throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+        throw new HttpsError(
+            "invalid-argument",
+            "Password must be at least 6 characters."
+        );
     }
 
-    await admin.auth().updateUser(targetUid, { password: newPassword });
-    await db.collection("users").doc(targetUid).set({
-        passwordUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        passwordUpdatedBy: auth?.uid,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await admin.auth().updateUser(targetUid, {
+        password: newPassword,
+    });
+
+    await db.collection("users").doc(targetUid).set(
+        {
+            passwordUpdatedAt: FieldValue.serverTimestamp(),
+            passwordUpdatedBy: auth?.uid,
+            updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+    );
 
     await writeAdminAudit("set-user-password", auth!.uid, targetUid);
-    return { uid: targetUid, passwordUpdated: true };
+
+    return {
+        uid: targetUid,
+        passwordUpdated: true,
+    };
 });
 
 export const adminGeneratePasswordResetLink = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
+
     await requireAdmin(auth?.uid);
 
     const uid = String(request.data?.uid || "").trim();
     const emailInput = String(request.data?.email || "").trim().toLowerCase();
+
     if (!uid && !emailInput) {
         throw new HttpsError("invalid-argument", "uid or email is required.");
     }
 
     let userRecord: admin.auth.UserRecord;
-    if (uid) userRecord = await admin.auth().getUser(uid);
-    else userRecord = await admin.auth().getUserByEmail(emailInput);
+
+    if (uid) {
+        userRecord = await admin.auth().getUser(uid);
+    } else {
+        userRecord = await admin.auth().getUserByEmail(emailInput);
+    }
 
     const email = (userRecord.email || "").toLowerCase();
+
     if (!email) {
         throw new HttpsError("failed-precondition", "Target user has no email.");
     }
 
     const resetLink = await admin.auth().generatePasswordResetLink(email);
-    await writeAdminAudit("generate-password-reset-link", auth!.uid, userRecord.uid, { email });
+
+    await writeAdminAudit("generate-password-reset-link", auth!.uid, userRecord.uid, {
+        email,
+    });
 
     return {
         uid: userRecord.uid,
@@ -437,8 +698,13 @@ export const adminGeneratePasswordResetLink = onCall({ cors: true }, async (requ
     };
 });
 
+/* =========================
+   USER ACTIVITY
+========================= */
+
 export const recordUserActivity = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
+
     if (!auth?.uid) {
         throw new HttpsError("unauthenticated", "Not signed in.");
     }
@@ -461,38 +727,55 @@ export const recordUserActivity = onCall({ cors: true }, async (request) => {
         type,
         ...(route ? { route } : {}),
         ...(metadata && typeof metadata === "object" ? { metadata } : {}),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
     });
 
     const patch: Record<string, any> = {
-        lastActiveAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastActiveAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
     };
-    if (type === "login") {
-        patch.lastLoginAt = admin.firestore.FieldValue.serverTimestamp();
-    }
-    await db.collection("users").doc(auth.uid).set(patch, { merge: true });
 
-    return { ok: true };
+    if (type === "login") {
+        patch.lastLoginAt = FieldValue.serverTimestamp();
+    }
+
+    await db.collection("users").doc(auth.uid).set(patch, {
+        merge: true,
+    });
+
+    return {
+        ok: true,
+    };
 });
 
 export const listUserActivity = onCall({ cors: true }, async (request) => {
     const auth = request.auth;
+
     await requireAdmin(auth?.uid);
 
     const uid = String(request.data?.uid || "").trim();
     const limitRaw = Number(request.data?.limit || 40);
-    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 40;
+    const limit = Number.isFinite(limitRaw)
+        ? Math.min(Math.max(limitRaw, 1), 200)
+        : 40;
 
-    let querySnap: admin.firestore.QuerySnapshot;
+    let querySnap: QuerySnapshot;
+
     if (uid) {
-        querySnap = await db.collection("userActivity").where("uid", "==", uid).limit(limit).get();
+        querySnap = await db
+            .collection("userActivity")
+            .where("uid", "==", uid)
+            .limit(limit)
+            .get();
     } else {
         querySnap = await db.collection("userActivity").limit(limit).get();
     }
 
     const docs = querySnap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+        }))
         .sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
     return docs.slice(0, limit).map((d: any) => ({
@@ -507,24 +790,15 @@ export const listUserActivity = onCall({ cors: true }, async (request) => {
     }));
 });
 
-// HTTP endpoints with CORS for cross-origin browser fetches
-import { onRequest } from "firebase-functions/v2/https";
-
-function setCors(res: any, reqOrigin?: string) {
-    // In dev allow localhost, in prod you may restrict
-    const origin = reqOrigin || "*";
-    res.set("Access-Control-Allow-Origin", origin);
-    res.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    res.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    // Allow credentials in case client sends Authorization header with credentials
-    res.set("Access-Control-Allow-Credentials", "true");
-    // Ensure proxies vary by origin so caches treat origins separately
-    res.set("Vary", "Origin");
-}
+/* =========================
+   HTTP ENDPOINTS
+========================= */
 
 export const listDoctorsHttp = onRequest(async (req, res) => {
     console.log("listDoctorsHttp", req.method, "origin=", req.headers.origin);
+
     setCors(res, req.headers.origin as string | undefined);
+
     if (req.method === "OPTIONS") {
         res.status(204).send("");
         return;
@@ -532,39 +806,67 @@ export const listDoctorsHttp = onRequest(async (req, res) => {
 
     try {
         const snap = await db.collection("users").where("role", "==", "doctor").get();
-        let docs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+        let docs = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+        }));
+
         if (docs.length === 0) {
             const all = await db.collection("users").get();
-            docs = all.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+            docs = all.docs.map((d) => ({
+                id: d.id,
+                ...(d.data() as any),
+            }));
         }
-        const result = docs.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null }));
-        res.json(result);
+
+        const result = docs.map((d: any) => ({
+            id: d.id,
+            name: d.name || d.displayName || d.email || null,
+            role: d.role || null,
+        }));
+
+        res.status(200).json(result);
         return;
-    } catch (err) {
+    } catch (err: any) {
         console.error("listDoctorsHttp error:", err);
-        res.status(500).json({ error: "internal" });
+
+        res.status(500).json({
+            error: err?.message || "internal",
+            code: err?.code || null,
+        });
         return;
     }
 });
 
 export const listPatientsForDoctorHttp = onRequest(async (req, res) => {
     console.log("listPatientsForDoctorHttp", req.method, "origin=", req.headers.origin);
+
     setCors(res, req.headers.origin as string | undefined);
+
     if (req.method === "OPTIONS") {
         res.status(204).send("");
         return;
     }
 
     try {
-        const authHeader = (req.headers.authorization || "").split("Bearer ")[1];
-        if (!authHeader) {
+        const authHeader = req.headers.authorization || "";
+        const token = authHeader.startsWith("Bearer ")
+            ? authHeader.replace("Bearer ", "")
+            : "";
+
+        if (!token) {
             res.status(401).json({ error: "unauthenticated" });
             return;
         }
-        const decoded = await admin.auth().verifyIdToken(authHeader);
+
+        const decoded = await admin.auth().verifyIdToken(token);
         const callerId = decoded.uid;
+
         const callerDoc = await db.collection("users").doc(callerId).get();
         const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+
         if (callerRole !== "doctor" && callerRole !== "admin") {
             res.status(403).json({ error: "permission-denied" });
             return;
@@ -573,7 +875,11 @@ export const listPatientsForDoctorHttp = onRequest(async (req, res) => {
         const doctorId = String(req.body?.doctorId || callerId);
 
         const allSnap = await db.collection("users").get();
-        const all = allSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+
+        const all = allSnap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+        }));
 
         const isPatientCandidate = (u: any) => (u.role ? u.role === "patient" : true);
 
@@ -587,34 +893,52 @@ export const listPatientsForDoctorHttp = onRequest(async (req, res) => {
 
         const result = assigned.length > 0 ? assigned : all.filter(isPatientCandidate);
 
-        res.json(result.map((d) => ({ id: d.id, name: d.name || d.displayName || d.email || null, role: (d as any).role || null })));
+        res.status(200).json(
+            result.map((d: any) => ({
+                id: d.id,
+                name: d.name || d.displayName || d.email || null,
+                role: d.role || null,
+            }))
+        );
         return;
-    } catch (err) {
+    } catch (err: any) {
         console.error("listPatientsForDoctorHttp error:", err);
-        res.status(500).json({ error: "internal" });
+
+        res.status(500).json({
+            error: err?.message || "internal",
+            code: err?.code || null,
+        });
         return;
     }
 });
 
 export const listUserActivityHttp = onRequest(async (req, res) => {
     console.log("listUserActivityHttp", req.method, "origin=", req.headers.origin);
+
     setCors(res, req.headers.origin as string | undefined);
+
     if (req.method === "OPTIONS") {
         res.status(204).send("");
         return;
     }
 
     try {
-        const authHeader = (req.headers.authorization || "").split("Bearer ")[1];
-        if (!authHeader) {
+        const authHeader = req.headers.authorization || "";
+        const token = authHeader.startsWith("Bearer ")
+            ? authHeader.replace("Bearer ", "")
+            : "";
+
+        if (!token) {
             res.status(401).json({ error: "unauthenticated" });
             return;
         }
 
-        const decoded = await admin.auth().verifyIdToken(authHeader);
+        const decoded = await admin.auth().verifyIdToken(token);
         const callerId = decoded.uid;
+
         const callerDoc = await db.collection("users").doc(callerId).get();
         const callerRole = callerDoc.exists ? (callerDoc.data() as any).role : null;
+
         if (callerRole !== "admin") {
             res.status(403).json({ error: "permission-denied" });
             return;
@@ -623,17 +947,27 @@ export const listUserActivityHttp = onRequest(async (req, res) => {
         const body = req.method === "GET" ? req.query : req.body;
         const uid = String(body?.uid || "").trim();
         const limitRaw = Number(body?.limit || 40);
-        const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 40;
+        const limit = Number.isFinite(limitRaw)
+            ? Math.min(Math.max(limitRaw, 1), 200)
+            : 40;
 
-        let querySnap: admin.firestore.QuerySnapshot;
+        let querySnap: QuerySnapshot;
+
         if (uid) {
-            querySnap = await db.collection("userActivity").where("uid", "==", uid).limit(limit).get();
+            querySnap = await db
+                .collection("userActivity")
+                .where("uid", "==", uid)
+                .limit(limit)
+                .get();
         } else {
             querySnap = await db.collection("userActivity").limit(limit).get();
         }
 
         const docs = querySnap.docs
-            .map((d) => ({ id: d.id, ...(d.data() as any) }))
+            .map((d) => ({
+                id: d.id,
+                ...(d.data() as any),
+            }))
             .sort((a: any, b: any) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
             .slice(0, limit)
             .map((d: any) => ({
@@ -647,17 +981,21 @@ export const listUserActivityHttp = onRequest(async (req, res) => {
                 createdAt: d.createdAt || null,
             }));
 
-        res.json(docs);
+        res.status(200).json(docs);
         return;
-    } catch (err) {
+    } catch (err: any) {
         console.error("listUserActivityHttp error:", err);
-        res.status(500).json({ error: "internal" });
+
+        res.status(500).json({
+            error: err?.message || "internal",
+            code: err?.code || null,
+        });
         return;
     }
 });
 
 /* =========================
-   RESET PASSWORD (FORGOT PASSWORD FLOW)
+   RESET PASSWORD
 ========================= */
 
 export const resetPassword = onCall({ cors: true }, async (request) => {
@@ -671,14 +1009,15 @@ export const resetPassword = onCall({ cors: true }, async (request) => {
     }
 
     if (!newPassword || newPassword.length < 6) {
-        throw new HttpsError("invalid-argument", "Password must be at least 6 characters.");
+        throw new HttpsError(
+            "invalid-argument",
+            "Password must be at least 6 characters."
+        );
     }
 
     try {
-        // Get user by email
         const userRecord = await admin.auth().getUserByEmail(email);
 
-        // Update password using Admin SDK (no current password needed!)
         await admin.auth().updateUser(userRecord.uid, {
             password: newPassword,
         });
@@ -699,7 +1038,7 @@ export const resetPassword = onCall({ cors: true }, async (request) => {
 });
 
 /* =========================
-   CHAT ATTACHMENT UPLOAD (CORS-SAFE)
+   CHAT ATTACHMENT UPLOAD
 ========================= */
 
 export const uploadChatAttachment = onCall({ cors: true }, async (request) => {
@@ -714,28 +1053,39 @@ export const uploadChatAttachment = onCall({ cors: true }, async (request) => {
     const dataBase64Raw = String(request.data?.dataBase64 || "").trim();
 
     if (!chatId || !fileName || !contentType || !dataBase64Raw) {
-        throw new HttpsError("invalid-argument", "chatId, fileName, contentType and dataBase64 are required.");
+        throw new HttpsError(
+            "invalid-argument",
+            "chatId, fileName, contentType and dataBase64 are required."
+        );
     }
 
     const isImage = contentType.startsWith("image/");
     const isPdf = contentType === "application/pdf";
+
     if (!isImage && !isPdf) {
-        throw new HttpsError("invalid-argument", "Only image and PDF uploads are supported.");
+        throw new HttpsError(
+            "invalid-argument",
+            "Only image and PDF uploads are supported."
+        );
     }
 
-    const base64 = dataBase64Raw.includes(",") ? dataBase64Raw.split(",")[1] : dataBase64Raw;
+    const base64 = dataBase64Raw.includes(",")
+        ? dataBase64Raw.split(",")[1]
+        : dataBase64Raw;
+
     if (!base64) {
         throw new HttpsError("invalid-argument", "Invalid file data.");
     }
 
     const buffer = Buffer.from(base64, "base64");
     const maxBytes = 8 * 1024 * 1024;
+
     if (buffer.length > maxBytes) {
         throw new HttpsError("invalid-argument", "File too large. Max size is 8MB.");
     }
 
-    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const objectPath = `chatAttachments/${chatId}/${senderId}/${Date.now()}_${safeName}`;
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const objectPath = `chatAttachments/${chatId}/${senderId}/${Date.now()}_${safeFileName}`;
 
     try {
         const bucket = admin.storage().bucket();
@@ -752,7 +1102,9 @@ export const uploadChatAttachment = onCall({ cors: true }, async (request) => {
             },
         });
 
-        const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+        const url = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(
+            objectPath
+        )}?alt=media&token=${token}`;
 
         return {
             name: fileName,
@@ -764,5 +1116,208 @@ export const uploadChatAttachment = onCall({ cors: true }, async (request) => {
     } catch (error) {
         console.error("uploadChatAttachment error:", error);
         throw new HttpsError("internal", "Failed to upload attachment.");
+    }
+
+});
+/* =========================
+   GEMINI AI CHATBOT
+========================= */
+
+export const askGeminiChat = onCall({ cors: true }, async (request) => {
+    if (!request.auth?.uid) {
+        throw new HttpsError("unauthenticated", "Please sign in first.");
+    }
+
+    const uid = request.auth.uid;
+    const message = String(request.data?.message || "").trim();
+    const history = Array.isArray(request.data?.history) ? request.data.history : [];
+
+    if (!message) {
+        throw new HttpsError("invalid-argument", "Message is required.");
+    }
+
+    if (message.length > 2000) {
+        throw new HttpsError("invalid-argument", "Message is too long.");
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+        console.error("GEMINI_API_KEY is missing.");
+        throw new HttpsError("failed-precondition", "Gemini API key is not configured.");
+    }
+
+    const userSnap = await db.collection("users").doc(uid).get();
+    const userData = userSnap.exists ? (userSnap.data() as any) : {};
+    const role = userData?.role || "user";
+    const name = userData?.name || userData?.displayName || userData?.email || "User";
+
+    const safeHistory = history
+        .slice(-8)
+        .map((item: any) => ({
+            role: item.role === "assistant" ? "model" : "user",
+            parts: [
+                {
+                    text: String(item.content || "").slice(0, 1000),
+                },
+            ],
+        }))
+        .filter((item: any) => item.parts[0].text.trim().length > 0);
+
+    const systemInstruction = `
+You are EchoCare AI Assistant inside a health support web application for Alzheimer’s/dementia care and patient support.
+
+User profile:
+- Name: ${name}
+- Role: ${role}
+
+Scope:
+You must only help with:
+- Alzheimer’s and dementia support
+- Memory care and daily routine guidance
+- Medication reminder guidance
+- Appointment preparation and follow-up support
+- SOS/emergency safety guidance
+- Mental wellbeing and caregiver support
+- EchoCare app usage such as reminders, appointments, SOS, messages, reports, and care team features
+
+Out-of-scope rule:
+If the user asks about unrelated topics such as sports, movies, politics, coding, games, entertainment, random facts, or anything not related to EchoCare/health/care support, politely refuse and redirect them back to EchoCare health support.
+
+Medical safety rules:
+- Never claim to be a doctor.
+- Never diagnose illness.
+- Never prescribe medicine or change dosage.
+- Never tell a patient to stop or start medication.
+- For emergency symptoms such as chest pain, breathing difficulty, fainting, severe bleeding, stroke signs, overdose, self-harm, or immediate danger, tell the user to contact emergency services immediately and use EchoCare SOS/contact caregiver or doctor.
+- For medication, advise following the doctor’s prescription and contacting doctor/caregiver if unsure.
+
+Style:
+- Be short, calm, simple, and supportive.
+- Use clear patient-friendly language.
+- For Alzheimer’s/dementia users, keep answers easy to understand.
+- Give step-by-step help when useful.
+`;
+
+    const contents = [
+        ...safeHistory,
+        {
+            role: "user",
+            parts: [
+                {
+                    text: message,
+                },
+            ],
+        },
+    ];
+
+    try {
+        const requestBody = {
+            systemInstruction: {
+                parts: [{ text: systemInstruction }],
+            },
+            contents,
+            generationConfig: {
+                temperature: 0.5,
+                topP: 0.9,
+                maxOutputTokens: 700,
+            },
+            safetySettings: [
+                {
+                    category: "HARM_CATEGORY_HARASSMENT",
+                    threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+                {
+                    category: "HARM_CATEGORY_HATE_SPEECH",
+                    threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+                {
+                    category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+                {
+                    category: "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    threshold: "BLOCK_MEDIUM_AND_ABOVE",
+                },
+            ],
+        };
+
+        const modelNames = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-flash-latest",
+        ];
+
+        let data: any = null;
+        let lastErrorMessage = "Gemini API request failed.";
+
+        for (const modelName of modelNames) {
+            const response = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify(requestBody),
+                }
+            );
+
+            data = await response.json();
+
+            if (response.ok) {
+                console.log(`Gemini response generated using model: ${modelName}`);
+
+                const reply =
+                    data?.candidates?.[0]?.content?.parts
+                        ?.map((part: any) => part.text || "")
+                        .join("")
+                        .trim() ||
+                    "Sorry, I could not generate a response. Please try again.";
+
+                await db.collection("aiChatLogs").add({
+                    uid,
+                    role,
+                    message,
+                    reply,
+                    modelName,
+                    createdAt: FieldValue.serverTimestamp(),
+                });
+
+                return {
+                    reply,
+                };
+            }
+
+            lastErrorMessage = data?.error?.message || lastErrorMessage;
+            console.error(`Gemini API error using ${modelName}:`, data);
+
+            const isTemporaryBusy =
+                response.status === 429 ||
+                response.status === 500 ||
+                response.status === 503 ||
+                String(lastErrorMessage).toLowerCase().includes("high demand") ||
+                String(lastErrorMessage).toLowerCase().includes("overloaded");
+
+            if (!isTemporaryBusy) {
+                break;
+            }
+        }
+
+        throw new HttpsError(
+            "internal",
+            lastErrorMessage || "Gemini is busy right now. Please try again."
+        );
+    } catch (error: any) {
+        console.error("askGeminiChat error:", error);
+
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
+        throw new HttpsError(
+            "internal",
+            error?.message || "Failed to contact Gemini."
+        );
     }
 });
