@@ -1,6 +1,7 @@
 import { useNavigate, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "@/firebase";
+import { languageTools } from "@/lib/languagetools";
 import { doc, onSnapshot } from "firebase/firestore";
 import { format, isSameDay, startOfDay, subDays } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Logo } from "@/components/Logo";
+import { useUserNotifications } from "@/hooks/useUserNotifications";
 import {
   Home,
   MessageSquare,
@@ -25,7 +27,7 @@ import {
   LogOut,
   UserCircle2,
 } from "lucide-react";
-import { listenDoctors, createChat, sendMessage } from "@/services/chat";
+import { createChat, sendMessage } from "@/services/chat";
 import { createPatientNote } from "@/services/notes";
 import { listenRemindersByPatient, ReminderRecord } from "@/services/reminders";
 import { AppointmentRecord, listenAppointmentsByPatient } from "@/services/appointments";
@@ -43,12 +45,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 export default function PatientDashboard() {
+  useUserNotifications();
   const { dueSoonCount } = useReminderNotifications();
   const { upcomingCount: appointmentNotifCount } = useAppointmentNotifications({ role: "patient", userId: auth.currentUser?.uid || undefined });
 
   const navigate = useNavigate();
   const location = useLocation();
   const user = auth.currentUser;
+  const [language, setLanguage] = useState(languageTools.getLanguage());
   const [welcomeName, setWelcomeName] = useState(user?.displayName || user?.email || "Patient");
   const [profilePhotoUrl, setProfilePhotoUrl] = useState(user?.photoURL || "");
   const [patientProfile, setPatientProfile] = useState<any | null>(null);
@@ -145,28 +149,71 @@ export default function PatientDashboard() {
   }, [user?.uid, user?.displayName, user?.email]);
 
   useEffect(() => {
-    const unsubscribe = listenDoctors((list) => {
-      const normalized = list.map((d: any) => ({
-        id: d.id,
-        name: d.name || d.displayName || d.email || "Doctor",
-        specialization: d.specialization || "General Medicine",
-        phone: d.phone || "",
-        email: d.email || "",
-        photoURL: d.photoURL || "",
-        qualification: d.qualification || "",
-        hospital: d.hospital || "",
-        bio: d.bio || "",
-        availability: d.availability || "available",
-      }));
+    if (!patientProfile) {
+      setDoctors([]);
+      setSelectedDoctor(null);
+      return;
+    }
 
-      setDoctors(normalized);
-      if (normalized.length > 0 && !selectedDoctor) {
-        setSelectedDoctor(normalized[0]);
-      }
-    });
+    const assignedDoctorIds = [
+      patientProfile.assignedDoctorId,
+      patientProfile.doctorId,
+      ...(Array.isArray(patientProfile.assignedDoctors) ? patientProfile.assignedDoctors : []),
+    ].filter(Boolean);
 
-    return () => unsubscribe && unsubscribe();
-  }, [selectedDoctor]);
+    if (assignedDoctorIds.length === 0) {
+      setDoctors([]);
+      setSelectedDoctor(null);
+      return;
+    }
+
+    const unsubscribers = assignedDoctorIds.map((doctorId: string) =>
+      onSnapshot(doc(db, "users", doctorId), (snap) => {
+        setDoctors((prev) => {
+          const withoutCurrent = prev.filter((doctor) => doctor.id !== doctorId);
+
+          if (!snap.exists()) {
+            return withoutCurrent;
+          }
+
+          const data = snap.data() as any;
+
+          if (data.role !== "doctor") {
+            return withoutCurrent;
+          }
+
+          const doctor = {
+            id: snap.id,
+            name: data.name || data.displayName || data.email || "Doctor",
+            specialization: data.specialization || "General Medicine",
+            phone: data.phone || "",
+            email: data.email || "",
+            photoURL: data.photoURL || data.photoUrl || "",
+            qualification: data.qualification || "",
+            hospital: data.hospital || "",
+            bio: data.bio || "",
+            availability: data.availability || "available",
+          };
+
+          const nextDoctors = [...withoutCurrent, doctor];
+
+          setSelectedDoctor((current: any) => {
+            if (current && nextDoctors.some((item) => item.id === current.id)) {
+              return current;
+            }
+
+            return nextDoctors[0] || null;
+          });
+
+          return nextDoctors;
+        });
+      })
+    );
+
+    return () => {
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, [patientProfile]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -191,6 +238,70 @@ export default function PatientDashboard() {
 
     return () => unsubscribe?.();
   }, [user?.uid]);
+  const [nowTick, setNowTick] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNowTick(Date.now());
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const latestMedicationStatus = useMemo(() => {
+    const medicationReminders = reminders
+      .filter((item) => item.type === "medication")
+      .sort((a, b) => b.dueAt.getTime() - a.dueAt.getTime());
+
+    const latest = medicationReminders[0];
+
+    if (!latest) {
+      return {
+        label: languageTools.t("noMedication"),
+        description: languageTools.t("noMedicationReminder"),
+        textClass: "text-muted-foreground",
+        iconClass: "text-muted-foreground",
+      };
+    }
+
+    const now = nowTick;
+    const dueTime = latest.dueAt.getTime();
+    const isMissed = latest.status === "pending" && now - dueTime > graceMs;
+
+    if (latest.status === "completed") {
+      return {
+        label: languageTools.t("medicationStatusTaken"),
+        description: `${latest.title} completed at ${latest.completedAt ? format(latest.completedAt, "p") : "scheduled time"}.`,
+        textClass: "text-green-500",
+        iconClass: "text-green-500",
+      };
+    }
+
+    if (isMissed) {
+      return {
+        label: languageTools.t("medicationStatusMissed"),
+        description: `${latest.title} was due at ${format(latest.dueAt, "PPP p")}.`,
+        textClass: "text-red-500",
+        iconClass: "text-red-500",
+      };
+    }
+
+    if (latest.status === "canceled") {
+      return {
+        label: languageTools.t("medicationStatusCanceled"),
+        description: `${latest.title} was canceled.`,
+        textClass: "text-slate-500",
+        iconClass: "text-slate-500",
+      };
+    }
+
+    return {
+      label: languageTools.t("medicationStatusPending"),
+      description: `${latest.title} is due at ${format(latest.dueAt, "PPP p")}.`,
+      textClass: "text-amber-500",
+      iconClass: "text-amber-500",
+    };
+  }, [reminders, nowTick, graceMs]);
 
   const medicationAdherence = useMemo(() => {
     const today = startOfDay(new Date());
@@ -263,6 +374,11 @@ export default function PatientDashboard() {
     }
   };
 
+  const handleLanguageToggle = () => {
+    const newLang = languageTools.toggleLanguage();
+    setLanguage(newLang);
+  };
+
   const Nav = () => (
     <nav className="space-y-2">
       <Button
@@ -271,7 +387,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient")}
       >
         <Home className="w-4 h-4" />
-        <span className="sidebar-label">Home</span>
+        <span className="sidebar-label">{languageTools.t("home")}</span>
       </Button>
 
       <Button
@@ -280,7 +396,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/messages")}
       >
         <MessagesSquare className="w-4 h-4" />
-        <span className="sidebar-label">Messages</span>
+        <span className="sidebar-label">{languageTools.t("messages")}</span>
       </Button>
 
       <Button
@@ -289,7 +405,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/chatbot")}
       >
         <MessageSquare className="w-4 h-4" />
-        <span className="sidebar-label">Chatbot</span>
+        <span className="sidebar-label">{languageTools.t("chatbot")}</span>
       </Button>
 
       <Button
@@ -298,7 +414,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/appointments")}
       >
         <Calendar className="w-4 h-4" />
-        <span className="sidebar-label">Appointments</span>
+        <span className="sidebar-label">{languageTools.t("appointments")}</span>
       </Button>
 
       <Button
@@ -307,7 +423,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/reminders")}
       >
         <Bell className="w-4 h-4" />
-        <span className="sidebar-label">Reminders</span>
+        <span className="sidebar-label">{languageTools.t("reminders")}</span>
       </Button>
 
       <Button
@@ -316,7 +432,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/reports")}
       >
         <FileText className="w-4 h-4" />
-        <span className="sidebar-label">Reports</span>
+        <span className="sidebar-label">{languageTools.t("reports")}</span>
       </Button>
 
       <Button
@@ -325,7 +441,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/notes")}
       >
         <NotebookPen className="w-4 h-4" />
-        <span className="sidebar-label">Notes</span>
+        <span className="sidebar-label">{languageTools.t("notes")}</span>
       </Button>
 
       <Button
@@ -334,7 +450,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/games")}
       >
         <Brain className="w-4 h-4" />
-        <span className="sidebar-label">Games</span>
+        <span className="sidebar-label">{languageTools.t("games")}</span>
       </Button>
 
       <Button
@@ -343,7 +459,7 @@ export default function PatientDashboard() {
         onClick={() => navigate("/patient/settings")}
       >
         <Settings className="w-4 h-4" />
-        <span className="sidebar-label">Settings</span>
+        <span className="sidebar-label">{languageTools.t("settings")}</span>
       </Button>
 
       <Button
@@ -353,12 +469,12 @@ export default function PatientDashboard() {
         disabled={sendingSos}
       >
         <LifeBuoy className="w-4 h-4" />
-        <span className="sidebar-label">{sendingSos ? "Sending..." : "SOS"}</span>
+        <span className="sidebar-label">{sendingSos ? languageTools.t("sending") : languageTools.t("sos")}</span>
       </Button>
 
       <Button variant="ghost" className="sidebar-item w-full justify-start gap-3">
         <ThumbsUp className="w-4 h-4" />
-        <span className="sidebar-label">Feedback</span>
+        <span className="sidebar-label">{languageTools.t("feedback")}</span>
       </Button>
 
       <Button
@@ -371,8 +487,28 @@ export default function PatientDashboard() {
         }}
       >
         <LogOut className="w-4 h-4" />
-        <span className="sidebar-label">Logout</span>
+        <span className="sidebar-label">{languageTools.t("logout")}</span>
       </Button>
+
+      {/* Language Switcher */}
+      <div className="flex gap-2 pt-2 border-t mt-2">
+        <Button
+          variant={language === "en" ? "default" : "outline"}
+          size="sm"
+          className="flex-1 text-xs"
+          onClick={handleLanguageToggle}
+        >
+          EN
+        </Button>
+        <Button
+          variant={language === "ne" ? "default" : "outline"}
+          size="sm"
+          className="flex-1 text-xs"
+          onClick={handleLanguageToggle}
+        >
+          NE
+        </Button>
+      </div>
     </nav>
   );
 
@@ -404,16 +540,34 @@ export default function PatientDashboard() {
                 <Nav />
               </SheetContent>
             </Sheet>
-            <span className="font-semibold text-sm">Dashboard</span>
+            <span className="font-semibold text-sm">{languageTools.t("dashboard")}</span>
           </div>
-          <Button size="icon" variant="ghost" className="relative">
-            <Bell className="w-5 h-5" />
-            {notificationBadgeCount > 0 && (
-              <span className="absolute -top-1 -right-1 h-5 min-w-[20px] rounded-full bg-destructive text-[11px] text-destructive-foreground flex items-center justify-center px-1 leading-none">
-                {notificationBadgeCount}
-              </span>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={language === "en" ? "default" : "outline"}
+              size="sm"
+              className="text-xs"
+              onClick={handleLanguageToggle}
+            >
+              EN
+            </Button>
+            <Button
+              variant={language === "ne" ? "default" : "outline"}
+              size="sm"
+              className="text-xs"
+              onClick={handleLanguageToggle}
+            >
+              NE
+            </Button>
+            <Button size="icon" variant="ghost" className="relative">
+              <Bell className="w-5 h-5" />
+              {notificationBadgeCount > 0 && (
+                <span className="absolute -top-1 -right-1 h-5 min-w-[20px] rounded-full bg-destructive text-[11px] text-destructive-foreground flex items-center justify-center px-1 leading-none">
+                  {notificationBadgeCount}
+                </span>
+              )}
+            </Button>
+          </div>
         </header>
 
         {/* PAGE CONTENT */}
@@ -430,27 +584,27 @@ export default function PatientDashboard() {
                         <UserCircle2 className="w-8 h-8 text-muted-foreground" />
                       )}
                     </div>
-                    <p className="text-sm text-muted-foreground">Your account profile</p>
+                    <p className="text-sm text-muted-foreground">{languageTools.t("yourAccountProfile")}</p>
                   </div>
                   <h1 className="text-2xl sm:text-3xl font-bold mb-2">
-                    Welcome Back, {welcomeName}!
+                    {languageTools.t("welcomeBack", { name: welcomeName })}
                   </h1>
                   <h2 className="text-xl sm:text-2xl font-semibold mb-6">
-                    Today&apos;s Health Overview
+                    {languageTools.t("todaysHealthOverview")}
                   </h2>
 
                   <div className="flex flex-wrap gap-3">
                     <Button className="gap-2" onClick={() => goToBooking(selectedDoctor?.id)}>
                       <Calendar className="w-4 h-4" />
-                      Book Appointment
+                      {languageTools.t("bookAppointment")}
                     </Button>
                     <Button variant="outline" className="gap-2" onClick={() => setShowQuickNote((prev) => !prev)}>
                       <FileText className="w-4 h-4" />
-                      Add Note
+                      {languageTools.t("addNote")}
                     </Button>
                     <Button variant="outline" className="gap-2" onClick={() => setShowReminderPopup((prev) => !prev)}>
                       <Bell className="w-4 h-4" />
-                      Check Reminders
+                      {languageTools.t("checkReminders")}
                     </Button>
                   </div>
 
@@ -460,16 +614,16 @@ export default function PatientDashboard() {
                         <CardTitle className="text-base flex items-center justify-between gap-2">
                           <span className="flex items-center gap-2">
                             <Bell className="w-4 h-4" />
-                            Reminder Notifications
+                            {languageTools.t("reminderNotifications")}
                           </span>
                           <Button size="sm" variant="outline" onClick={() => navigate("/patient/reminders")}>
-                            Add Reminder
+                            {languageTools.t("addReminder")}
                           </Button>
                         </CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-2">
                         {reminders.filter((r) => r.status === "pending").length === 0 ? (
-                          <p className="text-sm text-muted-foreground">No pending reminders.</p>
+                          <p className="text-sm text-muted-foreground">{languageTools.t("noPendingReminders")}</p>
                         ) : (
                           reminders
                             .filter((r) => r.status === "pending")
@@ -477,14 +631,14 @@ export default function PatientDashboard() {
                             .map((item) => (
                               <div key={item.id} className="rounded-md border p-3">
                                 <p className="font-medium text-sm">{item.title}</p>
-                                <p className="text-xs text-muted-foreground mt-1">{item.description || "No description"}</p>
+                                <p className="text-xs text-muted-foreground mt-1">{item.description || languageTools.t("noDescription")}</p>
                                 <p className="text-xs mt-1">Due: {item.dueAt.toLocaleString()}</p>
                               </div>
                             ))
                         )}
                         <div className="flex justify-end">
                           <Button variant="ghost" size="sm" onClick={() => setShowReminderPopup(false)}>
-                            Close
+                            {languageTools.t("close")}
                           </Button>
                         </div>
                       </CardContent>
@@ -494,26 +648,26 @@ export default function PatientDashboard() {
                   {showQuickNote && (
                     <Card className="mt-4">
                       <CardHeader className="pb-3">
-                        <CardTitle className="text-base">Quick Note</CardTitle>
+                        <CardTitle className="text-base">{languageTools.t("quickNote")}</CardTitle>
                       </CardHeader>
                       <CardContent className="space-y-3">
                         <Input
                           value={quickNoteTitle}
                           onChange={(e) => setQuickNoteTitle(e.target.value)}
-                          placeholder="Title (optional)"
+                          placeholder={languageTools.t("titleOptional")}
                         />
                         <Textarea
                           value={quickNoteContent}
                           onChange={(e) => setQuickNoteContent(e.target.value)}
-                          placeholder="Write your note..."
+                          placeholder={languageTools.t("writeYourNote")}
                           className="min-h-24"
                         />
                         <div className="flex gap-2">
                           <Button onClick={handleSaveQuickNote} disabled={savingQuickNote || !quickNoteContent.trim()}>
-                            {savingQuickNote ? "Saving..." : "Save Note"}
+                            {savingQuickNote ? languageTools.t("saving") : languageTools.t("saveNote")}
                           </Button>
-                          <Button variant="outline" onClick={() => setShowQuickNote(false)}>Cancel</Button>
-                          <Button variant="ghost" onClick={() => navigate("/patient/notes")}>Open Full Notes</Button>
+                          <Button variant="outline" onClick={() => setShowQuickNote(false)}>{languageTools.t("cancel")}</Button>
+                          <Button variant="ghost" onClick={() => navigate("/patient/notes")}>{languageTools.t("openFullNotes")}</Button>
                         </div>
                       </CardContent>
                     </Card>
@@ -525,15 +679,19 @@ export default function PatientDashboard() {
                     <CardHeader className="pb-3">
                       <div className="flex items-center justify-between">
                         <CardTitle className="text-sm font-medium text-muted-foreground">
-                          Medication Status
+                          {languageTools.t("medicationStatus")}
                         </CardTitle>
-                        <Pill className="w-4 h-4 text-success" />
+                        <Pill className={`w-4 h-4 ${latestMedicationStatus.iconClass}`} />
                       </div>
                     </CardHeader>
+
                     <CardContent>
-                      <div className="text-3xl font-bold text-success">Taken</div>
+                      <div className={`text-3xl font-bold ${latestMedicationStatus.textClass}`}>
+                        {latestMedicationStatus.label}
+                      </div>
+
                       <p className="text-sm text-muted-foreground mt-1">
-                        Today's medication completed
+                        {latestMedicationStatus.description}
                       </p>
                     </CardContent>
                   </Card>
@@ -542,11 +700,11 @@ export default function PatientDashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
                   <Card className="lg:col-span-1">
                     <CardHeader>
-                      <CardTitle>Doctors</CardTitle>
+                      <CardTitle>{languageTools.t("doctors")}</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-2 max-h-72 overflow-y-auto">
                       {doctors.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No doctors available.</p>
+                        <p className="text-sm text-muted-foreground">{languageTools.t("noDoctorsAvailable")}</p>
                       ) : (
                         doctors.map((doctor) => (
                           <Button
@@ -560,7 +718,7 @@ export default function PatientDashboard() {
                               <p className="text-xs text-muted-foreground truncate">{doctor.specialization}</p>
                             </div>
                             <span className={`ml-auto text-xs ${doctor.availability === "available" ? "text-green-600" : "text-slate-500"}`}>
-                              {doctor.availability === "available" ? "Available" : "Unavailable"}
+                              {doctor.availability === "available" ? languageTools.t("available") : languageTools.t("unavailable")}
                             </span>
                           </Button>
                         ))
@@ -570,11 +728,11 @@ export default function PatientDashboard() {
 
                   <Card className="lg:col-span-2">
                     <CardHeader>
-                      <CardTitle>Doctor Details</CardTitle>
+                      <CardTitle>{languageTools.t("doctorDetails")}</CardTitle>
                     </CardHeader>
                     <CardContent>
                       {!selectedDoctor ? (
-                        <p className="text-sm text-muted-foreground">Select a doctor to view details.</p>
+                        <p className="text-sm text-muted-foreground">{languageTools.t("selectDoctorToViewDetails")}</p>
                       ) : (
                         <div className="space-y-4">
                           <div>
@@ -583,9 +741,9 @@ export default function PatientDashboard() {
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                            <p><span className="font-medium">Phone:</span> {selectedDoctor.phone || "Not added"}</p>
-                            <p><span className="font-medium">Qualification:</span> {selectedDoctor.qualification || "Not added"}</p>
-                            <p className="sm:col-span-2"><span className="font-medium">Hospital:</span> {selectedDoctor.hospital || "Not added"}</p>
+                            <p><span className="font-medium">{languageTools.t("phone")}</span> {selectedDoctor.phone || languageTools.t("notAdded")}</p>
+                            <p><span className="font-medium">{languageTools.t("qualification")}</span> {selectedDoctor.qualification || languageTools.t("notAdded")}</p>
+                            <p className="sm:col-span-2"><span className="font-medium">{languageTools.t("hospital")}</span> {selectedDoctor.hospital || languageTools.t("notAdded")}</p>
                           </div>
 
                           {selectedDoctor.bio ? (
@@ -595,11 +753,11 @@ export default function PatientDashboard() {
                           <div className="flex flex-wrap gap-3 pt-1">
                             <Button className="gap-2" onClick={() => goToBooking(selectedDoctor.id)}>
                               <Calendar className="w-4 h-4" />
-                              Book Appointment
+                              {languageTools.t("bookAppointment")}
                             </Button>
                             <Button variant="outline" className="gap-2" onClick={() => goToChat(selectedDoctor.id)}>
                               <MessagesSquare className="w-4 h-4" />
-                              Chat with Doctor
+                              {languageTools.t("chatWithDoctor")}
                             </Button>
                           </div>
                         </div>
@@ -611,17 +769,17 @@ export default function PatientDashboard() {
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                   <Card>
                     <CardHeader>
-                      <CardTitle>Upcoming Appointments</CardTitle>
+                      <CardTitle>{languageTools.t("upcomingAppointments")}</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
                       {appointmentsLoading ? (
-                        <p className="text-sm text-muted-foreground">Loading appointments...</p>
+                        <p className="text-sm text-muted-foreground">{languageTools.t("loadingAppointments")}</p>
                       ) : upcomingAppointments.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No upcoming appointments.</p>
+                        <p className="text-sm text-muted-foreground">{languageTools.t("noUpcomingAppointments")}</p>
                       ) : (
                         upcomingAppointments.map((appt) => (
                           <div key={appt.id} className="p-4 border rounded-lg">
-                            <h4 className="font-semibold">{appt.doctorName || "Doctor"}</h4>
+                            <h4 className="font-semibold">{appt.doctorName || languageTools.t("doctor")}</h4>
                             <p className="text-sm text-muted-foreground">
                               {format(appt.scheduledAt, "MMM d, h:mm a")}
                               {appt.location ? ` - ${appt.location}` : ""}
@@ -634,8 +792,8 @@ export default function PatientDashboard() {
 
                   <Card>
                     <CardHeader>
-                      <CardTitle>Medication Adherence</CardTitle>
-                      <p className="text-sm text-muted-foreground">Last 7 days</p>
+                      <CardTitle>{languageTools.t("medicationAdherence")}</CardTitle>
+                      <p className="text-sm text-muted-foreground">{languageTools.t("lastSevenDays")}</p>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
@@ -648,11 +806,11 @@ export default function PatientDashboard() {
                                 : day.status === "partial"
                                   ? "bg-amber-500/10 text-amber-700 border-amber-500/30"
                                   : "bg-muted text-muted-foreground border-muted";
-                          const label = day.status === "taken" ? "Taken" : day.status === "missed" ? "Missed" : day.status === "partial" ? "Partial" : "No meds";
+                          const labelKey = day.status === "taken" ? "taken" : day.status === "missed" ? "missed" : day.status === "partial" ? "partial" : "noMeds";
                           return (
                             <div key={day.label} className={`rounded-lg border p-3 space-y-1 ${color}`}>
                               <p className="text-xs font-semibold">{day.label}</p>
-                              <p className="text-xs">{label}</p>
+                              <p className="text-xs">{languageTools.t(labelKey)}</p>
                               {day.items.slice(0, 2).map((med) => (
                                 <p key={med.id} className="text-[11px] truncate font-medium text-foreground">
                                   {med.title}
@@ -666,10 +824,10 @@ export default function PatientDashboard() {
                         })}
                       </div>
                       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Taken</span>
-                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-amber-500"></span> Partial</span>
-                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-red-500"></span> Missed</span>
-                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-muted"></span> No meds</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> {languageTools.t("takenBadge")}</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-amber-500"></span> {languageTools.t("partialBadge")}</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-red-500"></span> {languageTools.t("missedBadge")}</span>
+                        <span className="flex items-center gap-1"><span className="inline-block w-3 h-3 rounded-full bg-muted"></span> {languageTools.t("noMedsBadge")}</span>
                       </div>
                     </CardContent>
                   </Card>

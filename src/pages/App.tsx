@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -32,9 +33,12 @@ import DoctorPatients from "./doctor/DoctorPatients";
 import DoctorProfile from "./doctor/DoctorProfile";
 import DoctorReports from "./doctor/DoctorReports";
 import DoctorAnalytics from "@/pages/doctor/DoctorAnalytics";
+import DoctorChatbot from "./doctor/Chatbot";
 import DoctorSettings from "./doctor/Settings";
 
+
 import CaregiverDashboard from "@/pages/CaregiverDashboard";
+import CaregiverChatbot from "./caregiver/Chatbot";
 import CaregiverAppointments from "./caregiver/Appointments";
 import CaregiverPatients from "./caregiver/Patients";
 import CaregiverMessages from "./caregiver/Messages";
@@ -56,6 +60,22 @@ import RoleRoute from "@/components/RoleRoute";
 const queryClient = new QueryClient();
 
 export default function App() {
+  useEffect(() => {
+    // Initialize push notifications on app load
+    const initNotifications = async () => {
+      try {
+        // Request notification permission
+        if ("Notification" in window && Notification.permission === "default") {
+          await Notification.requestPermission();
+        }
+      } catch (error) {
+        console.error("Error initializing notifications:", error);
+      }
+    };
+
+    initNotifications();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
@@ -95,6 +115,7 @@ export default function App() {
                 {/* Doctor only */}
                 <Route element={<RoleRoute allow={["doctor"]} />}>
                   <Route path="/doctor" element={<DoctorDashboard />} />
+                  <Route path="/doctor/chatbot" element={<DoctorChatbot />} />
                   <Route path="/doctor/patients" element={<DoctorPatients />} />
                   <Route path="/doctor/messages" element={<DoctorMessages />} />
                   <Route path="/doctor/appointments" element={<DoctorAppointments />} />
@@ -107,6 +128,7 @@ export default function App() {
                 {/* Caregiver only */}
                 <Route element={<RoleRoute allow={["caregiver"]} />}>
                   <Route path="/caregiver" element={<CaregiverDashboard />} />
+                  <Route path="/caregiver/chatbot" element={<CaregiverChatbot />} />
                   <Route path="/caregiver/patients" element={<CaregiverPatients />} />
                   <Route path="/caregiver/messages" element={<CaregiverMessages />} />
                   <Route path="/caregiver/appointments" element={<CaregiverAppointments />} />

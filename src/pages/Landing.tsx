@@ -1,3 +1,5 @@
+import { Download } from "lucide-react";
+import { usePwaInstall } from "@/hooks/usePwaInstall";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +11,7 @@ import doctorHero from "@/assets/doctor-hero.jpg";
 
 export default function Landing() {
   const [showIntro, setShowIntro] = useState(true);
+  const { canInstall, isInstalled, installApp } = usePwaInstall();
 
   useEffect(() => {
     const timer = setTimeout(() => setShowIntro(false), 1600);
@@ -61,6 +64,16 @@ export default function Landing() {
                   <Button size="lg" className="text-base">
                     Get Started
                   </Button>
+                  {!isInstalled && canInstall && (
+                    <Button
+                      variant="outline"
+                      onClick={installApp}
+                      className="gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Install App
+                    </Button>
+                  )}
                 </Link>
                 <a href="#about">
                   <Button size="lg" variant="outline" className="text-base">
@@ -193,7 +206,7 @@ export default function Landing() {
                 <div className="flex items-center gap-4 mb-6">
                   <div className="w-16 h-16 rounded-full bg-gradient-primary"></div>
                   <div>
-                    <p className="font-semibold text-lg">John Doe</p>
+                    <p className="font-semibold text-lg">Samyam Karki</p>
                     <p className="text-sm text-muted-foreground">Patient</p>
                   </div>
                 </div>
