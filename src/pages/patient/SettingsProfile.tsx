@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Camera, UserCircle2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { languageTools } from "@/lib/languagetools";
 
 async function uploadProfileImageToCloudinary(userId: string, file: File): Promise<string> {
     if (!file.type.startsWith("image/")) {
@@ -51,6 +52,7 @@ async function uploadProfileImageToCloudinary(userId: string, file: File): Promi
 export default function PatientSettingsProfile() {
     const navigate = useNavigate();
     const user = auth.currentUser;
+    const [language, setLanguage] = useState(languageTools.getLanguage());
 
     const [name, setName] = useState("");
     const [phone, setPhone] = useState("");
@@ -77,6 +79,10 @@ export default function PatientSettingsProfile() {
             }
         })();
     }, [user?.uid, user?.displayName, user?.photoURL]);
+
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+    };
 
     const onPhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0] || null;

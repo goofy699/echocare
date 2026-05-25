@@ -4,6 +4,7 @@ import {
     collection,
     deleteDoc,
     doc,
+    getDoc,
     onSnapshot,
     query,
     serverTimestamp,
@@ -69,8 +70,12 @@ function sortByDueDate(items: ReminderRecord[]) {
     return [...items].sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
 }
 
+function uniqueIds(ids: Array<string | null | undefined>) {
+    return Array.from(new Set(ids.filter(Boolean))) as string[];
+}
+
 export async function createReminder(input: CreateReminderInput) {
-    await addDoc(collection(db, "reminders"), {
+    const reminderRef = await addDoc(collection(db, "reminders"), {
         patientId: input.patientId,
         title: input.title,
         description: input.description ?? "",
@@ -82,13 +87,59 @@ export async function createReminder(input: CreateReminderInput) {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     });
+
+    let patientName = "Patient";
+    let caregiverId: string | null = null;
+
+    try {
+        const patientSnap = await getDoc(doc(db, "users", input.patientId));
+
+        if (patientSnap.exists()) {
+            const patient = patientSnap.data() as any;
+            patientName = patient.name || patient.displayName || patient.email || "Patient";
+            caregiverId = patient.assignedCaregiverId || patient.caregiverId || null;
+        }
+    } catch (error) {
+        console.error("Failed to fetch patient for reminder notification:", error);
+    }
+
+    const recipients = uniqueIds([
+        input.patientId,
+        caregiverId,
+    ]);
+
+    await Promise.all(
+        recipients.map((recipientId) => {
+            const recipientRole = recipientId === input.patientId ? "patient" : "caregiver";
+
+            return addDoc(collection(db, "notifications"), {
+                type: "reminder",
+                title: `Reminder set: ${input.title}`,
+                body: `${patientName} has a ${input.type} reminder at ${input.dueAt.toLocaleString()}.`,
+                senderId: input.createdBy,
+                recipientId,
+                recipientRole,
+                patientId: input.patientId,
+                patientName,
+                reminderId: reminderRef.id,
+                reminderTitle: input.title,
+                reminderType: input.type,
+                dueAt: Timestamp.fromDate(input.dueAt),
+                read: false,
+                createdAt: serverTimestamp(),
+            });
+        })
+    );
+
+    return reminderRef.id;
 }
 
 export function listenRemindersByPatient(
     patientId: string,
-    callback: (reminders: ReminderRecord[]) => void,
+    callback: (reminders: ReminderRecord[]) => void
 ) {
     const q = query(collection(db, "reminders"), where("patientId", "==", patientId));
+
     return onSnapshot(
         q,
         (snapshot) => {
@@ -98,7 +149,7 @@ export function listenRemindersByPatient(
         (error) => {
             console.error("listenRemindersByPatient error:", error);
             callback([]);
-        },
+        }
     );
 }
 
@@ -124,16 +175,18 @@ export async function deleteReminder(reminderId: string) {
 
 export function getReminderBuckets(reminders: ReminderRecord[], now: Date = new Date()) {
     const upcoming = reminders.filter(
-        (item) => item.status === "pending" && item.dueAt.getTime() > now.getTime(),
+        (item) => item.status === "pending" && item.dueAt.getTime() > now.getTime()
     );
+
     const completedToday = reminders.filter(
         (item) =>
             item.status === "completed" &&
             item.completedAt &&
-            isSameDay(item.completedAt, now),
+            isSameDay(item.completedAt, now)
     );
+
     const missed = reminders.filter(
-        (item) => item.status === "pending" && item.dueAt.getTime() < now.getTime(),
+        (item) => item.status === "pending" && item.dueAt.getTime() < now.getTime()
     );
 
     return {

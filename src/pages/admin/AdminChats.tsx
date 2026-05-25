@@ -78,13 +78,13 @@ export default function AdminChats() {
 
     return (
         <AdminLayout title="Admin Chat Monitor" subtitle="Privacy audit view of user chat text and attachments.">
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[75vh] min-h-0">
-                <Card className="lg:col-span-1 p-3 flex flex-col min-h-0">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 lg:gap-4 h-auto lg:h-[75vh] lg:min-h-0">
+                <Card className="lg:col-span-1 p-3 flex flex-col min-h-0 lg:max-h-full">
                     <CardTitle className="text-base mb-3">Threads</CardTitle>
-                    <div className="space-y-2 overflow-y-auto min-h-0">
+                    <div className="space-y-2 overflow-y-auto min-h-0 max-h-96 lg:max-h-none">
                         {chats.map((chat) => (
-                            <Button key={chat.id} variant={chat.id === selectedChatId ? "secondary" : "ghost"} className="w-full justify-start h-auto py-2" onClick={() => setSelectedChatId(chat.id)}>
-                                <div className="text-left min-w-0">
+                            <Button key={chat.id} variant={chat.id === selectedChatId ? "secondary" : "ghost"} className="w-full justify-start h-auto py-2 px-2" onClick={() => setSelectedChatId(chat.id)}>
+                                <div className="text-left min-w-0 flex-1">
                                     <p className="text-sm font-medium truncate">{threadLabel(chat)}</p>
                                     <p className="text-[11px] text-muted-foreground truncate">Thread ID: {chat.id}</p>
                                     <p className="text-xs text-muted-foreground truncate">{chat.lastMessage || "No messages"}</p>
@@ -95,19 +95,19 @@ export default function AdminChats() {
                 </Card>
 
                 <Card className="lg:col-span-3 flex flex-col min-h-0 overflow-hidden">
-                    <CardHeader>
-                        <CardTitle>{selected ? threadLabel(selected) : "Select thread"}</CardTitle>
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-lg">{selected ? threadLabel(selected) : "Select thread"}</CardTitle>
                     </CardHeader>
-                    <CardContent className="flex-1 space-y-3 overflow-y-auto min-h-0">
+                    <CardContent className="flex-1 space-y-2 sm:space-y-3 overflow-y-auto min-h-0 max-h-96 lg:max-h-none">
                         {messages.length === 0 ? (
                             <p className="text-sm text-muted-foreground">No messages in this thread.</p>
                         ) : messages.map((message) => (
-                            <div key={message.id} className="rounded-md border p-3 text-sm">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <p className="font-medium">Sender: {displayUser(message.senderId)}{roleOf(message.senderId) ? ` (${roleOf(message.senderId)})` : ""}</p>
-                                    <p className="text-xs text-muted-foreground">{formatDateTime(message.createdAt)}</p>
+                            <div key={message.id} className="rounded-md border p-2 sm:p-3 text-sm hover:bg-accent transition">
+                                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-2 mb-1">
+                                    <p className="font-medium text-xs sm:text-sm truncate">Sender: {displayUser(message.senderId)}{roleOf(message.senderId) ? ` (${roleOf(message.senderId)})` : ""}</p>
+                                    <p className="text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(message.createdAt)}</p>
                                 </div>
-                                {message.text ? <p className="mt-1 whitespace-pre-wrap break-words">{message.text}</p> : null}
+                                {message.text ? <p className="text-xs sm:text-sm whitespace-pre-wrap break-words">{message.text}</p> : null}
                                 {message.attachment ? (
                                     <p className="text-xs text-muted-foreground mt-2">Attachment: {message.attachment.name || "file"}</p>
                                 ) : null}

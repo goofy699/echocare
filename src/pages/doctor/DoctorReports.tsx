@@ -9,7 +9,14 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Logo } from "@/components/Logo";
 import { useToast } from "@/hooks/use-toast";
-import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, FileText, Download, Paperclip, X, UploadCloud, Trash2 } from "lucide-react";
+import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, FileText, Download, Paperclip, X, UploadCloud, Trash2, Menu, LogOut } from "lucide-react";
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet";
 
 type ReportMessage = {
     id: string;
@@ -238,7 +245,70 @@ export default function DoctorReports() {
     const doctorReviewedCount = reports.filter((report) => report.senderId === doctorId).length;
 
     return (
-        <div className="h-screen bg-background flex overflow-hidden">
+        <div className="min-h-screen bg-background flex flex-col lg:flex-row overflow-hidden">
+            {/* MOBILE HEADER */}
+            <header className="border-b border-border bg-card sticky top-0 z-40 lg:hidden">
+                <div className="flex items-center gap-4 h-16 px-4">
+                    <Sheet>
+                        <SheetTrigger asChild>
+                            <Button size="icon" variant="ghost">
+                                <Menu className="w-5 h-5" />
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="left">
+                            <SheetHeader>
+                                <SheetTitle>
+                                    <Logo />
+                                </SheetTitle>
+                            </SheetHeader>
+                            <nav className="space-y-2 mt-6">
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
+                                    <LayoutDashboard className="w-4 h-4" />
+                                    Dashboard
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
+                                    <Users className="w-4 h-4" />
+                                    Patients
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
+                                    <CalendarIcon className="w-4 h-4" />
+                                    Appointments
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+                                    <MessageSquare className="w-4 h-4" />
+                                    Messages
+                                </Button>
+                                <Button variant="secondary" className="w-full justify-start gap-3">
+                                    <FileText className="w-4 h-4" />
+                                    Reports
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
+                                    <BarChart3 className="w-4 h-4" />
+                                    Analytics
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
+                                    <Settings className="w-4 h-4" />
+                                    Settings
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    className="w-full justify-start gap-3 mt-4"
+                                    onClick={() => {
+                                        auth.signOut();
+                                        navigate("/auth");
+                                    }}
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                    Logout
+                                </Button>
+                            </nav>
+                        </SheetContent>
+                    </Sheet>
+                    <h1 className="font-semibold">Reports</h1>
+                </div>
+            </header>
+
+            {/* DESKTOP SIDEBAR */}
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block overflow-y-auto">
                 <Logo className="mb-8" />
                 <nav className="space-y-2">
@@ -280,20 +350,20 @@ export default function DoctorReports() {
                             navigate("/auth");
                         }}
                     >
-                        <span className="text-sm">🚪</span>
+                        <LogOut className="w-4 h-4" />
                         Logout
                     </Button>
                 </div>
             </aside>
 
-            <main className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 lg:p-8">
+            <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
                 <div className="max-w-6xl mx-auto space-y-6">
                     <div>
                         <h1 className="text-2xl sm:text-3xl font-bold mb-2">Patient Reports</h1>
                         <p className="text-muted-foreground">Review patient reports, download files, and send your comments or reviewed report back.</p>
                     </div>
 
-                    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                         <Card className="p-5 flex flex-col items-center justify-center">
                             <span className="font-semibold">Selected Patient Reports</span>
                             <span className="text-3xl font-bold mt-2">{reports.length}</span>
@@ -308,10 +378,10 @@ export default function DoctorReports() {
                         </Card>
                     </div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-[520px]">
-                        <Card className="lg:col-span-1 p-4 flex flex-col min-h-0">
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                        <Card className="lg:col-span-1 p-4 flex flex-col">
                             <h2 className="font-semibold mb-3">Patients</h2>
-                            <div className="space-y-2 overflow-y-auto min-h-0 overscroll-contain">
+                            <div className="space-y-2 overflow-y-auto">
                                 {patientsLoading ? (
                                     <p className="text-sm text-muted-foreground">Loading patients...</p>
                                 ) : patients.length === 0 ? (
@@ -334,8 +404,8 @@ export default function DoctorReports() {
                             </div>
                         </Card>
 
-                        <div className="lg:col-span-3 grid grid-rows-[1fr_auto] gap-6 min-h-0">
-                            <Card className="p-4 sm:p-5 flex flex-col min-h-0 overflow-hidden">
+                        <div className="lg:col-span-3 grid gap-6">
+                            <Card className="p-4 sm:p-5 flex flex-col overflow-hidden">
                                 <div className="mb-3">
                                     <h2 className="text-lg font-semibold">Report Timeline</h2>
                                     <p className="text-xs text-muted-foreground mt-1">
@@ -343,7 +413,7 @@ export default function DoctorReports() {
                                     </p>
                                 </div>
 
-                                <div className="overflow-auto min-h-0 overscroll-contain space-y-3">
+                                <div className="overflow-auto space-y-3">
                                     {reports.length === 0 ? (
                                         <div className="rounded-md border px-3 py-4 text-sm text-muted-foreground">
                                             No report activity for this patient yet.

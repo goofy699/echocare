@@ -38,18 +38,20 @@ export default function AdminAppointments() {
             </div>
 
             <Card>
-                <CardHeader><CardTitle>All Appointments</CardTitle></CardHeader>
-                <CardContent className="space-y-3">
+                <CardHeader><CardTitle className="text-lg sm:text-xl">All Appointments</CardTitle></CardHeader>
+                <CardContent className="space-y-2 sm:space-y-3">
                     {appointments.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No appointments found.</p>
                     ) : appointments.map((item) => (
-                        <div key={item.id} className="rounded-md border p-3 flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                                <p className="font-medium">{item.patientName || item.patientId} with {item.doctorName || item.doctorId}</p>
-                                <p className="text-xs text-muted-foreground">{item.location || "-"}</p>
+                        <div key={item.id} className="rounded-md border p-2 sm:p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 hover:bg-accent transition">
+                            <div className="flex-1 min-w-0">
+                                <p className="font-medium text-sm truncate">{item.patientName || item.patientId} with {item.doctorName || item.doctorId}</p>
+                                <p className="text-xs text-muted-foreground truncate">{item.location || "-"}</p>
                                 <p className="text-xs text-muted-foreground">Scheduled: {formatDateTime(item.scheduledAt)}</p>
                             </div>
-                            <Badge>{item.status || "pending"}</Badge>
+                            <div className="flex items-center gap-2 justify-between sm:justify-end">
+                                <Badge className="text-xs">{item.status || "pending"}</Badge>
+                            </div>
                         </div>
                     ))}
                 </CardContent>

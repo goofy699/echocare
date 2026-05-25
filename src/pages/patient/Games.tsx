@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Brain, RefreshCw, Trophy, Clock, Zap, ArrowLeft } from "lucide-react";
+import { languageTools } from "@/lib/languagetools";
 
 // Memory Game
 function MemoryGame() {

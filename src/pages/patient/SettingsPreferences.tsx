@@ -9,11 +9,13 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Moon, Sun } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { languageTools } from "@/lib/languagetools";
 
 export default function PatientSettingsPreferences() {
     const navigate = useNavigate();
     const user = auth.currentUser;
     const { theme, setTheme } = useTheme();
+    const [language, setLanguage] = useState(languageTools.getLanguage());
 
     const [emailNotifications, setEmailNotifications] = useState(true);
     const [pushNotifications, setPushNotifications] = useState(true);
@@ -39,6 +41,10 @@ export default function PatientSettingsPreferences() {
             }
         })();
     }, [user?.uid]);
+
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+    };
 
     const save = async () => {
         if (!user?.uid) return;

@@ -8,7 +8,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Logo } from "@/components/Logo";
-import { LayoutDashboard, Users, MessageSquare, Calendar, Settings, Pill, Paperclip, Send, X, FileText } from "lucide-react";
+import { LayoutDashboard, Users, MessageSquare, Calendar, Settings, Pill, Paperclip, Send, X, FileText, LogOut, Menu } from "lucide-react";
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet";
 
 export default function CaregiverMessages() {
     const navigate = useNavigate();
@@ -127,6 +134,18 @@ export default function CaregiverMessages() {
         return null;
     };
 
+    const parseMapFromText = (text?: string) => {
+        if (typeof text !== "string") return null;
+        const regex = /https?:\/\/maps\.google\.com\/(?:\?q=|maps\?q=)?([-.\d]+),([-.\d]+)/i;
+        const match = text.match(regex);
+        if (!match) return null;
+        const lat = Number(match[1]);
+        const lng = Number(match[2]);
+        if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+        const url = match[0];
+        return { lat, lng, url };
+    };
+
     const send = async () => {
         if ((!message.trim() && !selectedFile) || !caregiverId || !chatId || !active) return;
         try {
@@ -179,134 +198,200 @@ export default function CaregiverMessages() {
 
     const label = useMemo(() => displayName(active) || "Select contact", [active]);
 
+    const NavLinks = () => (
+        <nav className="space-y-2">
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver")}><LayoutDashboard className="w-4 h-4" />Dashboard</Button>
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/patients")}><Users className="w-4 h-4" />Patients</Button>
+            <Button variant="secondary" className="w-full justify-start gap-3"><MessageSquare className="w-4 h-4" />Messages</Button>
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/appointments")}><Calendar className="w-4 h-4" />Schedule</Button>
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/reminders")}><Pill className="w-4 h-4" />Reminders</Button>
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/settings")}><Settings className="w-4 h-4" />Settings</Button>
+            <Button
+                variant="outline"
+                className="w-full justify-start gap-3"
+                onClick={async () => {
+                    sessionStorage.removeItem("echocare_logged_in");
+                    await auth.signOut();
+                    navigate("/auth", { replace: true });
+                }}
+            >
+                <LogOut className="w-4 h-4" />
+                Logout
+            </Button>
+        </nav>
+    );
+
     return (
-        <div className="min-h-screen bg-background flex">
-            <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block overflow-y-auto">
-                <Logo className="mb-8" />
-                <nav className="space-y-2">
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver")}><LayoutDashboard className="w-4 h-4" />Dashboard</Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/patients")}><Users className="w-4 h-4" />Patients</Button>
-                    <Button variant="secondary" className="w-full justify-start gap-3"><MessageSquare className="w-4 h-4" />Messages</Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/appointments")}><Calendar className="w-4 h-4" />Schedule</Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/reminders")}><Pill className="w-4 h-4" />Reminders</Button>
-                    <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/caregiver/settings")}><Settings className="w-4 h-4" />Settings</Button>
-                </nav>
-            </aside>
-
-            <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
-                <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-4 h-[80vh] min-h-0">
-                    <Card className="lg:col-span-1 p-4 flex flex-col min-h-0">
-                        <div className="flex gap-2 mb-3">
-                            <Button size="sm" variant={mode === "patients" ? "secondary" : "outline"} onClick={() => { setMode("patients"); setActive(null); }}>Patient</Button>
-                            <Button size="sm" variant={mode === "doctors" ? "secondary" : "outline"} onClick={() => { setMode("doctors"); setActive(null); }}>Doctor</Button>
-                        </div>
-                        <div className="space-y-2 overflow-y-auto min-h-0">
-                            {contacts.length === 0 ? (
-                                <p className="text-sm text-muted-foreground">
-                                    {mode === "patients" ? "No assigned patients." : "No linked doctors for your patients."}
-                                </p>
-                            ) : contacts.map((item: any) => (
-                                <Button key={item.id} variant={active?.id === item.id ? "secondary" : "ghost"} className="w-full justify-start h-auto py-2" onClick={() => setActive(item)}>
-                                    <Avatar className="h-8 w-8 mr-3">
-                                        <AvatarImage src={item.photoURL || undefined} alt={displayName(item)} />
-                                        <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
-                                    </Avatar>
-                                    <div className="min-w-0 text-left">
-                                        <p className="font-medium truncate">{displayName(item)}</p>
-                                        <p className="text-xs text-muted-foreground truncate">{displaySub(item)}</p>
-                                    </div>
-                                </Button>
-                            ))}
-                        </div>
-                    </Card>
-
-                    <Card className="lg:col-span-3 flex flex-col min-h-0 overflow-hidden">
-                        <CardHeader>
-                            <CardTitle>
-                                {active ? (
-                                    <div className="flex items-center gap-3">
-                                        <Avatar className="h-9 w-9">
-                                            <AvatarImage src={active.photoURL || undefined} alt={label} />
-                                            <AvatarFallback>{initials(label)}</AvatarFallback>
-                                        </Avatar>
-                                        <div>
-                                            <p className="text-base font-semibold">{label}</p>
-                                            <p className="text-xs text-muted-foreground font-normal">{displaySub(active)}</p>
-                                        </div>
-                                    </div>
-                                ) : "Select contact"}
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="flex-1 p-4 space-y-3 overflow-y-auto min-h-0">
-                            {messages.map((m: any) => {
-                                const createdAt: Date | null = m.createdAt?.toDate
-                                    ? m.createdAt.toDate()
-                                    : m.createdAt
-                                        ? new Date(m.createdAt)
-                                        : null;
-                                const timeLabel = createdAt ? format(createdAt, "p") : "Sending…";
-                                const isMine = m.senderId === caregiverId;
-                                const seenBy = Array.isArray(m.seenBy) ? m.seenBy : [];
-                                const counterpartId = active?.id;
-                                const seen = isMine && counterpartId ? seenBy.includes(counterpartId) : false;
-                                const statusLabel = isMine ? (seen ? `Seen · ${timeLabel}` : `Sent · ${timeLabel}`) : timeLabel;
-
-                                return (
-                                    <div key={m.id} className="space-y-1">
-                                        <div
-                                            className={`max-w-[70%] p-3 rounded-lg text-sm ${isMine
-                                                ? "ml-auto bg-primary text-primary-foreground"
-                                                : "bg-muted"
-                                                }`}
-                                        >
-                                            {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
-                                            {m.attachment && (
-                                                <div className={m.text ? "mt-2" : ""}>
-                                                    {m.attachment.kind === "image" ? (
-                                                        <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
-                                                            <img
-                                                                src={m.attachment.url}
-                                                                alt={m.attachment.name || "attachment"}
-                                                                className="max-h-48 rounded-md border"
-                                                            />
-                                                        </a>
-                                                    ) : (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => downloadAttachment(m.attachment)}
-                                                            className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm bg-background/60"
-                                                        >
-                                                            <FileText className="w-4 h-4" />
-                                                            <span className="truncate max-w-[180px]">{m.attachment.name || "PDF file"}</span>
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-                                        <p className={`text-[11px] text-muted-foreground ${isMine ? "text-right" : "text-left"}`}>
-                                            {statusLabel}
-                                        </p>
-                                    </div>
-                                );
-                            })}
-                        </CardContent>
-                        <div className="border-t p-3 space-y-2">
-                            {selectedFile && (
-                                <div className="rounded-md border px-3 py-2 text-sm flex items-center justify-between">
-                                    <span className="truncate">{selectedFile.name}</span>
-                                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setSelectedFile(null)}><X className="w-4 h-4" /></Button>
-                                </div>
-                            )}
-                            <div className="flex gap-2">
-                                <input ref={fileRef} type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={onPickFile} />
-                                <Button type="button" variant="outline" onClick={() => fileRef.current?.click()} disabled={!active || sending}><Paperclip className="w-4 h-4" /></Button>
-                                <Input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type a message..." disabled={!active || sending} onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()} />
-                                <Button onClick={send} disabled={(!message.trim() && !selectedFile) || !active || sending}><Send className="w-4 h-4" /></Button>
-                            </div>
-                        </div>
-                    </Card>
+        <div className="min-h-screen bg-background flex flex-col">
+            {/* MOBILE HEADER */}
+            <header className="border-b border-border bg-card sticky top-0 z-40 lg:hidden">
+                <div className="flex items-center gap-4 h-16 px-4">
+                    <Sheet>
+                        <SheetTrigger asChild>
+                            <Button size="icon" variant="ghost">
+                                <Menu className="w-5 h-5" />
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="left">
+                            <SheetHeader>
+                                <SheetTitle>
+                                    <Logo />
+                                </SheetTitle>
+                            </SheetHeader>
+                            <NavLinks />
+                        </SheetContent>
+                    </Sheet>
+                    <Logo className="h-8" />
                 </div>
-            </main>
+            </header>
+
+            <div className="flex flex-1 min-h-0">
+                {/* DESKTOP SIDEBAR */}
+                <aside className="w-64 bg-card border-r border-border p-6 hidden lg:flex flex-col overflow-hidden">
+                    <Logo className="mb-8" />
+                    <div className="overflow-y-auto max-h-[calc(100vh-120px)]">
+                        <NavLinks />
+                    </div>
+                </aside>
+
+                {/* MAIN CONTENT */}
+                <main className="flex-1 overflow-auto p-4 sm:p-6 lg:p-8">
+                    <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-4 gap-4 h-[80vh] min-h-0">
+                        <Card className="lg:col-span-1 p-4 flex flex-col min-h-0">
+                            <div className="flex gap-2 mb-3">
+                                <Button size="sm" variant={mode === "patients" ? "secondary" : "outline"} onClick={() => { setMode("patients"); setActive(null); }}>Patient</Button>
+                                <Button size="sm" variant={mode === "doctors" ? "secondary" : "outline"} onClick={() => { setMode("doctors"); setActive(null); }}>Doctor</Button>
+                            </div>
+                            <div className="space-y-2 overflow-y-auto min-h-0">
+                                {contacts.length === 0 ? (
+                                    <p className="text-sm text-muted-foreground">
+                                        {mode === "patients" ? "No assigned patients." : "No linked doctors for your patients."}
+                                    </p>
+                                ) : contacts.map((item: any) => (
+                                    <Button key={item.id} variant={active?.id === item.id ? "secondary" : "ghost"} className="w-full justify-start h-auto py-2" onClick={() => setActive(item)}>
+                                        <Avatar className="h-8 w-8 mr-3">
+                                            <AvatarImage src={item.photoURL || undefined} alt={displayName(item)} />
+                                            <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
+                                        </Avatar>
+                                        <div className="min-w-0 text-left">
+                                            <p className="font-medium truncate">{displayName(item)}</p>
+                                            <p className="text-xs text-muted-foreground truncate">{displaySub(item)}</p>
+                                        </div>
+                                    </Button>
+                                ))}
+                            </div>
+                        </Card>
+
+                        <Card className="lg:col-span-3 flex flex-col min-h-0 overflow-hidden">
+                            <CardHeader>
+                                <CardTitle>
+                                    {active ? (
+                                        <div className="flex items-center gap-3">
+                                            <Avatar className="h-9 w-9">
+                                                <AvatarImage src={active.photoURL || undefined} alt={label} />
+                                                <AvatarFallback>{initials(label)}</AvatarFallback>
+                                            </Avatar>
+                                            <div>
+                                                <p className="text-base font-semibold">{label}</p>
+                                                <p className="text-xs text-muted-foreground font-normal">{displaySub(active)}</p>
+                                            </div>
+                                        </div>
+                                    ) : "Select contact"}
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="flex-1 p-4 space-y-3 overflow-y-auto min-h-0">
+                                {messages.map((m: any) => {
+                                    const createdAt: Date | null = m.createdAt?.toDate
+                                        ? m.createdAt.toDate()
+                                        : m.createdAt
+                                            ? new Date(m.createdAt)
+                                            : null;
+                                    const timeLabel = createdAt ? format(createdAt, "p") : "Sending…";
+                                    const isMine = m.senderId === caregiverId;
+                                    const seenBy = Array.isArray(m.seenBy) ? m.seenBy : [];
+                                    const counterpartId = active?.id;
+                                    const seen = isMine && counterpartId ? seenBy.includes(counterpartId) : false;
+                                    const statusLabel = isMine ? (seen ? `Seen · ${timeLabel}` : `Sent · ${timeLabel}`) : timeLabel;
+                                    const mapInfo = parseMapFromText(m.text);
+
+                                    return (
+                                        <div key={m.id} className="space-y-1">
+                                            <div
+                                                className={`max-w-[70%] p-3 rounded-lg text-sm ${isMine
+                                                    ? "ml-auto bg-primary text-primary-foreground"
+                                                    : "bg-muted"
+                                                    }`}
+                                            >
+                                                {m.text && <p className="whitespace-pre-wrap">{m.text}</p>}
+                                                {mapInfo && (
+                                                    <div className="mt-3 space-y-2">
+                                                        <div className="overflow-hidden rounded-md border bg-background/70">
+                                                            <iframe
+                                                                title="SOS location map"
+                                                                src={`https://www.google.com/maps?q=${mapInfo.lat},${mapInfo.lng}&z=15&output=embed`}
+                                                                loading="lazy"
+                                                                className="h-48 w-full"
+                                                                allowFullScreen
+                                                            />
+                                                        </div>
+                                                        <a
+                                                            href={mapInfo.url}
+                                                            target="_blank"
+                                                            rel="noreferrer"
+                                                            className="inline-flex items-center gap-2 text-xs font-medium underline"
+                                                        >
+                                                            Open full map
+                                                        </a>
+                                                    </div>
+                                                )}
+                                                {m.attachment && (
+                                                    <div className={m.text ? "mt-2" : ""}>
+                                                        {m.attachment.kind === "image" ? (
+                                                            <a href={m.attachment.url} target="_blank" rel="noreferrer" className="block">
+                                                                <img
+                                                                    src={m.attachment.url}
+                                                                    alt={m.attachment.name || "attachment"}
+                                                                    className="max-h-48 rounded-md border"
+                                                                />
+                                                            </a>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => downloadAttachment(m.attachment)}
+                                                                className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm bg-background/60"
+                                                            >
+                                                                <FileText className="w-4 h-4" />
+                                                                <span className="truncate max-w-[180px]">{m.attachment.name || "PDF file"}</span>
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <p className={`text-[11px] text-muted-foreground ${isMine ? "text-right" : "text-left"}`}>
+                                                {statusLabel}
+                                            </p>
+                                        </div>
+                                    );
+                                })}
+                            </CardContent>
+                            <div className="border-t p-3 space-y-2">
+                                {selectedFile && (
+                                    <div className="rounded-md border px-3 py-2 text-sm flex items-center justify-between">
+                                        <span className="truncate">{selectedFile.name}</span>
+                                        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setSelectedFile(null)}><X className="w-4 h-4" /></Button>
+                                    </div>
+                                )}
+                                <div className="flex gap-2">
+                                    <input ref={fileRef} type="file" accept="image/*,.pdf,application/pdf" className="hidden" onChange={onPickFile} />
+                                    <Button type="button" variant="outline" onClick={() => fileRef.current?.click()} disabled={!active || sending}><Paperclip className="w-4 h-4" /></Button>
+                                    <Input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="Type a message..." disabled={!active || sending} onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()} />
+                                    <Button onClick={send} disabled={(!message.trim() && !selectedFile) || !active || sending}><Send className="w-4 h-4" /></Button>
+                                </div>
+                            </div>
+                        </Card>
+                    </div>
+                </main>
+            </div>
         </div>
     );
 }

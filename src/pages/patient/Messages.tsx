@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Send, Paperclip, X, FileText } from "lucide-react";
+import { Send, Paperclip, X, FileText, AlertCircle } from "lucide-react";
+import { languageTools } from "@/lib/languagetools";
 import {
     createChat,
     sendMessage as sendMessageToDb,
@@ -16,10 +17,12 @@ import {
     markMessagesSeen,
 } from "../../services/chat";
 import { useToast } from "@/hooks/use-toast";
-import { doc, onSnapshot, getDoc } from "firebase/firestore";
+import { doc, onSnapshot, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { createSosAlert } from "../../services/sos";
 
 export default function PatientMessages() {
     const user = auth.currentUser;
+    const [language, setLanguage] = useState(languageTools.getLanguage());
     const [contacts, setContacts] = useState<any[]>([]);
     const [doctorsLoading, setDoctorsLoading] = useState(false);
     const [activeContact, setActiveContact] = useState<any | null>(null);
@@ -27,6 +30,7 @@ export default function PatientMessages() {
     const [messages, setMessages] = useState<any[]>([]);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [sending, setSending] = useState(false);
+    const [sendingSos, setSendingSos] = useState(false);
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const [patientProfile, setPatientProfile] = useState<any | null>(null);
     const [caregiverProfile, setCaregiverProfile] = useState<any | null>(null);
@@ -209,6 +213,11 @@ export default function PatientMessages() {
         return () => { mounted = false; unsubProfile(); };
     }, [user?.uid]);
 
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+        setLanguage(newLang);
+    };
+
     // Load caregiver profile if assigned
     useEffect(() => {
         const caregiverId = patientProfile?.assignedCaregiverId || patientProfile?.caregiverId;
@@ -334,6 +343,103 @@ export default function PatientMessages() {
             toast({ title: "Send failed", description: "Could not send message. Try again.", variant: "destructive" });
         } finally {
             setSending(false);
+        }
+    };
+
+    const sendSos = async () => {
+        // Only allow SOS if chatting with caregiver
+        if (!activeContact || activeContact.role !== "caregiver") {
+            toast({ title: "Not available", description: "SOS is only available with your caregiver.", variant: "destructive" });
+            return;
+        }
+
+        if (!user) {
+            toast({ title: "Not signed in", description: "Please sign in to send SOS.", variant: "destructive" });
+            return;
+        }
+
+        setSendingSos(true);
+        try {
+            // Get user's current location
+            let lat = 0, lng = 0, address = "Location unknown";
+
+            if (navigator.geolocation) {
+                const position = await new Promise<GeolocationCoordinates>((resolve, reject) => {
+                    navigator.geolocation.getCurrentPosition(
+                        (pos) => resolve(pos.coords),
+                        (err) => {
+                            console.error("Geolocation error:", err);
+                            reject(err);
+                        },
+                        { timeout: 5000 }
+                    );
+                });
+
+                lat = position.latitude;
+                lng = position.longitude;
+
+                // Try to get address from coordinates using reverse geocoding
+                try {
+                    const response = await fetch(
+                        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
+                    );
+                    const data = await response.json();
+                    address = data.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+                } catch (e) {
+                    address = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+                }
+            }
+
+            // Create SOS alert in Firestore
+            const mapsLink = `https://maps.google.com/?q=${lat},${lng}`;
+            const sosMessage = `🚨 SOS ALERT: ${patientProfile?.name || "Patient"} needs immediate help!\\nLocation: ${address}\\nMap: ${mapsLink}`;
+
+            await createSosAlert({
+                patientId: user.uid,
+                patientName: patientProfile?.name || user.displayName || user.email,
+                caregiverId: activeContact?.id,
+                doctorId: null,
+                lat,
+                lng,
+                address,
+                source: "chat",
+            });
+
+            // Send SOS message to chat
+            await sendMessageToDb(chatId, user.uid, sosMessage);
+
+            // Create a notification document in Firestore for the caregiver
+            const notificationId = `sos_${user.uid}_${Date.now()}`;
+            await setDoc(doc(db, "notifications", notificationId), {
+                recipientId: activeContact.id,
+                senderId: user.uid,
+                senderName: patientProfile?.name || user.displayName || user.email,
+                type: "sos",
+                title: `🚨 SOS from ${patientProfile?.name || "Patient"}`,
+                body: `Patient needs help at: ${address}`,
+                latitude: lat,
+                longitude: lng,
+                address: address,
+                mapsLink: mapsLink,
+                read: false,
+                createdAt: serverTimestamp(),
+                expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hour expiry
+            });
+
+            toast({
+                title: "SOS sent!",
+                description: "Your caregiver has been notified with your location.",
+                variant: "default",
+            });
+        } catch (error) {
+            console.error("SOS send failed:", error);
+            toast({
+                title: "SOS send failed",
+                description: "Could not send SOS. Please try again or contact support.",
+                variant: "destructive",
+            });
+        } finally {
+            setSendingSos(false);
         }
     };
 
@@ -502,18 +608,30 @@ export default function PatientMessages() {
                                 type="button"
                                 variant="outline"
                                 onClick={() => fileInputRef.current?.click()}
-                                disabled={!user || sending}
+                                disabled={!user || sending || sendingSos}
                             >
                                 <Paperclip className="w-4 h-4" />
                             </Button>
+                            {activeContact?.role === "caregiver" && (
+                                <Button
+                                    type="button"
+                                    variant="destructive"
+                                    onClick={sendSos}
+                                    disabled={!user || sendingSos || sending}
+                                    className="gap-2"
+                                >
+                                    <AlertCircle className="w-4 h-4" />
+                                    {sendingSos ? "Sending..." : "SOS"}
+                                </Button>
+                            )}
                             <Input
                                 placeholder="Type a message…"
                                 value={message}
                                 onChange={(e) => setMessage(e.target.value)}
                                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
-                                disabled={sending || !user}
+                                disabled={sending || !user || sendingSos}
                             />
-                            <Button onClick={sendMessage} disabled={(!message.trim() && !selectedFile) || !user || sending}>
+                            <Button onClick={sendMessage} disabled={(!message.trim() && !selectedFile) || !user || sending || sendingSos}>
                                 <Send className="w-4 h-4" />
                             </Button>
                         </div>

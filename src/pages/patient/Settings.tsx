@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ShieldCheck, SlidersHorizontal, Stethoscope, UserCircle2 } from "lucide-react";
+import { languageTools } from "@/lib/languagetools";
 
 export default function PatientSettings() {
     const navigate = useNavigate();
@@ -39,6 +40,10 @@ export default function PatientSettings() {
         ],
         []
     );
+
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+    };
 
     return (
         <div className="space-y-6">

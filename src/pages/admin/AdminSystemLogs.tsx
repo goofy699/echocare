@@ -59,13 +59,13 @@ export default function AdminSystemLogs() {
     return (
         <AdminLayout title="System Logs" subtitle="Cross-module event timeline for admin operations and audits.">
             <Card>
-                <CardHeader><CardTitle>Recent Events</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-lg sm:text-xl">Recent Events</CardTitle></CardHeader>
                 <CardContent className="space-y-2">
                     {logs.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No log events found.</p>
                     ) : logs.map((log, index) => (
-                        <div key={`${log.text}-${index}`} className="rounded-md border p-3">
-                            <p className="text-sm">{log.text}</p>
+                        <div key={`${log.text}-${index}`} className="rounded-md border p-2 sm:p-3 hover:bg-accent transition">
+                            <p className="text-xs sm:text-sm break-words">{log.text}</p>
                             <p className="text-xs text-muted-foreground mt-1">{formatDateTime(log.at)}</p>
                         </div>
                     ))}

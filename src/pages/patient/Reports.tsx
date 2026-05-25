@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { UploadCloud, FileText, CheckCircle, AlertCircle, X, Download, Trash2 } from "lucide-react";
+import { languageTools } from "@/lib/languagetools";
 import {
     createChat,
     deleteChatMessage,
@@ -33,6 +34,7 @@ type ReportMessage = {
 export default function Reports() {
     const user = auth.currentUser;
     const { toast } = useToast();
+    const [language, setLanguage] = useState(languageTools.getLanguage());
 
     const [doctors, setDoctors] = useState<any[]>([]);
     const [doctorsLoading, setDoctorsLoading] = useState(false);

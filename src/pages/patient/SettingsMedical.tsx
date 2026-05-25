@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
+import { languageTools } from "@/lib/languagetools";
 
 const toCsv = (value: unknown) => (Array.isArray(value) ? value.join(", ") : "");
 const splitCsv = (value: string) => value.split(",").map((v) => v.trim()).filter(Boolean);
@@ -15,6 +16,7 @@ const splitCsv = (value: string) => value.split(",").map((v) => v.trim()).filter
 export default function PatientSettingsMedical() {
     const navigate = useNavigate();
     const user = auth.currentUser;
+    const [language, setLanguage] = useState(languageTools.getLanguage());
 
     const [age, setAge] = useState("");
     const [gender, setGender] = useState("");
@@ -53,6 +55,10 @@ export default function PatientSettingsMedical() {
             }
         })();
     }, [user?.uid]);
+
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+    };
 
     const save = async () => {
         if (!user?.uid) return;

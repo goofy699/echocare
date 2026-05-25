@@ -200,7 +200,7 @@ export default function AdminUsers() {
             <Card>
                 <CardHeader><CardTitle>Add User</CardTitle></CardHeader>
                 <CardContent>
-                    <form className="grid grid-cols-1 md:grid-cols-5 gap-3" onSubmit={submit}>
+                    <form className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3" onSubmit={submit}>
                         <Input placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
                         <Input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" />
                         <Input placeholder="Temporary Password" value={password} onChange={(e) => setPassword(e.target.value)} type="password" />
@@ -210,7 +210,7 @@ export default function AdminUsers() {
                             <option value="caregiver">Caregiver</option>
                             <option value="admin">Admin</option>
                         </select>
-                        <Button type="submit" disabled={saving}>{saving ? "Creating..." : "Create User"}</Button>
+                        <Button type="submit" disabled={saving} className="w-full">{saving ? "Creating..." : "Create User"}</Button>
                     </form>
                     <p className="text-xs text-muted-foreground mt-3">
                         This creates both Firebase Authentication login credentials and users collection profile.
@@ -221,35 +221,37 @@ export default function AdminUsers() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                 <Card className="lg:col-span-2">
                     <CardHeader>
-                        <CardTitle>All Users</CardTitle>
+                        <CardTitle className="text-lg sm:text-xl">All Users</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-3">
                         <Input placeholder="Search by email, name, role" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
                         {filtered.length === 0 ? (
                             <p className="text-sm text-muted-foreground">No users found.</p>
                         ) : (
-                            filtered.map((user) => (
-                                <div key={user.id} className={`rounded-md border p-3 flex flex-wrap items-center justify-between gap-2 cursor-pointer ${selectedUser?.id === user.id ? "border-primary" : ""}`} onClick={() => setSelectedUser(user)}>
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-9 h-9 rounded-full overflow-hidden bg-muted flex items-center justify-center">
-                                            {user.photoURL || user.photoUrl ? (
-                                                <img src={user.photoURL || user.photoUrl} alt={safeName(user)} className="w-full h-full object-cover" />
-                                            ) : (
-                                                <UserCircle2 className="w-5 h-5 text-muted-foreground" />
-                                            )}
+                            <div className="space-y-2">
+                                {filtered.map((user) => (
+                                    <div key={user.id} className={`rounded-md border p-2 sm:p-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between cursor-pointer transition ${selectedUser?.id === user.id ? "border-primary bg-primary/5" : "hover:bg-accent"}`} onClick={() => setSelectedUser(user)}>
+                                        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                                            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full overflow-hidden bg-muted flex-shrink-0 flex items-center justify-center">
+                                                {user.photoURL || user.photoUrl ? (
+                                                    <img src={user.photoURL || user.photoUrl} alt={safeName(user)} className="w-full h-full object-cover" />
+                                                ) : (
+                                                    <UserCircle2 className="w-4 h-4 sm:w-5 sm:h-5 text-muted-foreground" />
+                                                )}
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <p className="font-medium text-sm truncate">{safeName(user)}</p>
+                                                <p className="text-xs text-muted-foreground truncate">{user.email || user.id}</p>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <p className="font-medium">{safeName(user)}</p>
-                                            <p className="text-xs text-muted-foreground">{user.email || user.id}</p>
+                                        <div className="flex items-center gap-1 flex-wrap justify-between sm:justify-end">
+                                            <Badge className="text-xs">{user.role || "unknown"}</Badge>
+                                            {user.suspended && <Badge variant="destructive" className="text-xs">Suspended</Badge>}
+                                            <Badge variant="outline" className="text-xs whitespace-nowrap">Created {formatDateTime(user.createdAt)}</Badge>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                        <Badge>{user.role || "unknown"}</Badge>
-                                        {user.suspended && <Badge variant="destructive">Suspended</Badge>}
-                                        <Badge variant="outline">Created {formatDateTime(user.createdAt)}</Badge>
-                                    </div>
-                                </div>
-                            ))
+                                ))}
+                            </div>
                         )}
                     </CardContent>
                 </Card>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { format, isSameDay } from "date-fns";
-import { Calendar as CalendarIcon, Clock, Trash, LayoutDashboard, Users, MessageSquare, BarChart3, Settings, CheckCircle, XCircle, Clock3, FileText } from "lucide-react";
+import { Calendar as CalendarIcon, Clock, Trash, LayoutDashboard, Users, MessageSquare, BarChart3, Settings, CheckCircle, XCircle, Clock3, FileText, Menu, LogOut } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { auth } from "@/firebase";
@@ -18,6 +18,13 @@ import {
     splitAppointments,
     updateAppointmentStatus,
 } from "@/services/appointments";
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet";
 
 function formatDateTime(date: Date) {
     return `${format(date, "PPP")} • ${format(date, "p")}`;
@@ -89,8 +96,70 @@ export default function DoctorAppointments() {
     };
 
     return (
-        <div className="min-h-screen bg-background flex">
-            {/* Sidebar */}
+        <div className="min-h-screen bg-background flex flex-col lg:flex-row">
+            {/* MOBILE HEADER */}
+            <header className="border-b border-border bg-card sticky top-0 z-40 lg:hidden">
+                <div className="flex items-center gap-4 h-16 px-4">
+                    <Sheet>
+                        <SheetTrigger asChild>
+                            <Button size="icon" variant="ghost">
+                                <Menu className="w-5 h-5" />
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="left">
+                            <SheetHeader>
+                                <SheetTitle>
+                                    <Logo />
+                                </SheetTitle>
+                            </SheetHeader>
+                            <nav className="space-y-2 mt-6">
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
+                                    <LayoutDashboard className="w-4 h-4" />
+                                    Dashboard
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
+                                    <Users className="w-4 h-4" />
+                                    Patients
+                                </Button>
+                                <Button variant="secondary" className="w-full justify-start gap-3">
+                                    <CalendarIcon className="w-4 h-4" />
+                                    Appointments
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+                                    <MessageSquare className="w-4 h-4" />
+                                    Messages
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
+                                    <FileText className="w-4 h-4" />
+                                    Reports
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
+                                    <BarChart3 className="w-4 h-4" />
+                                    Analytics
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
+                                    <Settings className="w-4 h-4" />
+                                    Settings
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    className="w-full justify-start gap-3 mt-4"
+                                    onClick={() => {
+                                        auth.signOut();
+                                        navigate("/auth");
+                                    }}
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                    Logout
+                                </Button>
+                            </nav>
+                        </SheetContent>
+                    </Sheet>
+                    <h1 className="font-semibold">Appointments</h1>
+                </div>
+            </header>
+
+            {/* DESKTOP SIDEBAR */}
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
                 <Logo className="mb-8" />
                 <nav className="space-y-2">
@@ -132,13 +201,13 @@ export default function DoctorAppointments() {
                             navigate("/auth");
                         }}
                     >
-                        <span className="text-sm">🚪</span>
+                        <LogOut className="w-4 h-4" />
                         Logout
                     </Button>
                 </div>
             </aside>
 
-            {/* Main Content */}
+            {/* MAIN CONTENT */}
             <main className="flex-1 overflow-auto">
                 <div className="max-w-6xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
                     <div className="flex items-center justify-between gap-4">
@@ -153,57 +222,60 @@ export default function DoctorAppointments() {
                     </div>
 
                     {/* Upcoming Appointments with actions */}
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        <Card className="lg:col-span-2">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <Card className="md:col-span-2">
                             <CardHeader>
                                 <CardTitle>Upcoming Appointments</CardTitle>
                             </CardHeader>
-                            <CardContent className="space-y-3">
+                            <CardContent className="space-y-3 max-h-96 overflow-y-auto">
                                 {upcoming.length === 0 ? (
                                     <p className="text-sm text-muted-foreground">No upcoming appointments.</p>
                                 ) : (
                                     upcoming.map((item) => (
                                         <div key={item.id} className="p-4 border rounded-lg bg-background space-y-3">
-                                            <div className="flex items-start justify-between gap-2">
-                                                <div>
-                                                    <p className="font-semibold">{item.patientName}</p>
-                                                    <p className="text-sm text-muted-foreground">{formatDateTime(item.scheduledAt)}</p>
-                                                    <p className="text-sm text-muted-foreground">{item.location}</p>
-                                                    {item.notes && <p className="text-sm mt-1">{item.notes}</p>}
+                                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="font-semibold truncate">{item.patientName}</p>
+                                                    <p className="text-sm text-muted-foreground truncate">{formatDateTime(item.scheduledAt)}</p>
+                                                    <p className="text-sm text-muted-foreground truncate">{item.location}</p>
+                                                    {item.notes && <p className="text-sm mt-1 line-clamp-2">{item.notes}</p>}
                                                 </div>
                                                 <StatusBadge status={item.status} />
                                             </div>
                                             {/* Action Buttons */}
-                                            <div className="flex gap-2 pt-1">
+                                            <div className="flex flex-wrap gap-2 pt-1">
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    className="gap-1 text-success border-success/40 hover:bg-success/10"
+                                                    className="gap-1 text-success border-success/40 hover:bg-success/10 flex-1 sm:flex-none"
                                                     disabled={updating === item.id || item.status === "confirmed"}
                                                     onClick={() => handleStatusChange(item.id, "confirmed")}
                                                 >
                                                     <CheckCircle className="w-3.5 h-3.5" />
-                                                    Confirm
+                                                    <span className="hidden sm:inline">Confirm</span>
+                                                    <span className="sm:hidden">OK</span>
                                                 </Button>
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    className="gap-1 text-warning border-warning/40 hover:bg-warning/10"
+                                                    className="gap-1 text-warning border-warning/40 hover:bg-warning/10 flex-1 sm:flex-none"
                                                     disabled={updating === item.id || item.status === "pending"}
                                                     onClick={() => handleStatusChange(item.id, "pending")}
                                                 >
                                                     <Clock3 className="w-3.5 h-3.5" />
-                                                    Pending
+                                                    <span className="hidden sm:inline">Pending</span>
+                                                    <span className="sm:hidden">⏳</span>
                                                 </Button>
                                                 <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10"
+                                                    className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10 flex-1 sm:flex-none"
                                                     disabled={updating === item.id || item.status === "cancelled"}
                                                     onClick={() => handleStatusChange(item.id, "cancelled")}
                                                 >
                                                     <XCircle className="w-3.5 h-3.5" />
-                                                    Cancel
+                                                    <span className="hidden sm:inline">Cancel</span>
+                                                    <span className="sm:hidden">✕</span>
                                                 </Button>
                                             </div>
                                         </div>
@@ -214,7 +286,7 @@ export default function DoctorAppointments() {
 
                         <Card>
                             <CardHeader>
-                                <CardTitle>Calendar</CardTitle>
+                                <CardTitle className="text-lg">Calendar</CardTitle>
                             </CardHeader>
                             <CardContent>
                                 <Calendar mode="single" selected={selectedDate} onSelect={setSelectedDate} className="rounded-md border" />
@@ -260,16 +332,16 @@ export default function DoctorAppointments() {
                         <CardHeader>
                             <CardTitle>Past Appointments</CardTitle>
                         </CardHeader>
-                        <CardContent className="space-y-3">
+                        <CardContent className="space-y-3 max-h-96 overflow-y-auto">
                             {past.length === 0 ? (
                                 <p className="text-sm text-muted-foreground">No past appointments.</p>
                             ) : (
                                 past.map((item) => (
-                                    <div key={item.id} className="p-4 border rounded-lg bg-background flex justify-between items-center">
-                                        <div>
-                                            <p className="font-medium">{item.patientName}</p>
-                                            <p className="text-sm text-muted-foreground">{formatDateTime(item.scheduledAt)}</p>
-                                            <p className="text-sm text-muted-foreground">{item.location}</p>
+                                    <div key={item.id} className="p-4 border rounded-lg bg-background flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                        <div className="min-w-0 flex-1">
+                                            <p className="font-medium truncate">{item.patientName}</p>
+                                            <p className="text-sm text-muted-foreground truncate">{formatDateTime(item.scheduledAt)}</p>
+                                            <p className="text-sm text-muted-foreground truncate">{item.location}</p>
                                         </div>
                                         <StatusBadge status={item.status} />
                                     </div>

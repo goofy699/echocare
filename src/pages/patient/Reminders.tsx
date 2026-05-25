@@ -13,6 +13,7 @@ import {
     Utensils,
     X,
 } from "lucide-react";
+import { languageTools } from "@/lib/languagetools";
 
 import { auth } from "@/firebase";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +112,7 @@ export default function PatientReminders() {
     const { toast } = useToast();
     const user = auth.currentUser;
     const graceMs = 5 * 60 * 1000; // five-minute grace window
+    const [language, setLanguage] = useState(languageTools.getLanguage());
 
     const [reminders, setReminders] = useState<ReminderRecord[]>([]);
     const [searchQuery, setSearchQuery] = useState("");
@@ -131,6 +133,11 @@ export default function PatientReminders() {
         const unsubscribe = listenRemindersByPatient(user.uid, setReminders);
         return () => unsubscribe();
     }, [user?.uid]);
+
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+        setLanguage(newLang);
+    };
 
     const effectiveNow = new Date(now.getTime() - graceMs);
     const buckets = useMemo(() => getReminderBuckets(reminders, effectiveNow), [effectiveNow, reminders]);

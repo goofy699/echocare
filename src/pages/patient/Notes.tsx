@@ -8,9 +8,11 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { createPatientNote, deletePatientNote, listenPatientNotes, PatientNote, updatePatientNote } from "@/services/notes";
 import { FileText, Pencil, Trash2 } from "lucide-react";
+import { languageTools } from "@/lib/languagetools";
 
 export default function PatientNotes() {
     const user = auth.currentUser;
+    const [language, setLanguage] = useState(languageTools.getLanguage());
     const [notes, setNotes] = useState<PatientNote[]>([]);
     const [loading, setLoading] = useState(true);
 
@@ -32,6 +34,11 @@ export default function PatientNotes() {
 
         return () => un();
     }, [user?.uid]);
+
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+        setLanguage(newLang);
+    };
 
     const noteCountLabel = useMemo(() => `${notes.length} note${notes.length === 1 ? "" : "s"}`, [notes.length]);
 

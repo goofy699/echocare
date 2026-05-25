@@ -69,20 +69,22 @@ export default function AdminReports() {
             </div>
 
             <Card>
-                <CardHeader><CardTitle>Report Timeline</CardTitle></CardHeader>
-                <CardContent className="space-y-3">
+                <CardHeader><CardTitle className="text-lg sm:text-xl">Report Timeline</CardTitle></CardHeader>
+                <CardContent className="space-y-2 sm:space-y-3">
                     {reports.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No report messages found.</p>
                     ) : reports.map((report) => (
-                        <div key={`${report.chatId}-${report.id}`} className="rounded-md border p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-medium break-words">{String(report.text || "").replace(/^\[REPORT\]\s*/, "") || "Report"}</p>
-                                <Badge>{report.attachment ? "file" : "text"}</Badge>
+                        <div key={`${report.chatId}-${report.id}`} className="rounded-md border p-2 sm:p-3 hover:bg-accent transition">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between mb-2">
+                                <p className="font-medium text-sm break-words flex-1">{String(report.text || "").replace(/^\[REPORT\]\s*/, "") || "Report"}</p>
+                                <Badge className="text-xs w-fit">{report.attachment ? "file" : "text"}</Badge>
                             </div>
-                            <p className="text-xs text-muted-foreground mt-1">Chat: {report.chatId}</p>
-                            <p className="text-xs text-muted-foreground">Sender: {report.senderId}</p>
-                            <p className="text-xs text-muted-foreground">At: {formatDateTime(report.createdAt)}</p>
-                            {report.attachment ? <p className="text-xs text-muted-foreground">File: {report.attachment.name || "attachment"}</p> : null}
+                            <div className="space-y-1">
+                                <p className="text-xs text-muted-foreground truncate">Chat: {report.chatId}</p>
+                                <p className="text-xs text-muted-foreground truncate">Sender: {report.senderId}</p>
+                                <p className="text-xs text-muted-foreground">At: {formatDateTime(report.createdAt)}</p>
+                                {report.attachment ? <p className="text-xs text-muted-foreground truncate">File: {report.attachment.name || "attachment"}</p> : null}
+                            </div>
                         </div>
                     ))}
                 </CardContent>

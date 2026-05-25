@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, Search, Mail, Phone, Calendar, Clock, MapPin, FileText } from "lucide-react";
+import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, Search, Mail, Phone, Calendar, Clock, MapPin, FileText, Menu, LogOut } from "lucide-react";
 
 import { auth } from "@/firebase";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,13 @@ import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/Logo";
 import { fetchPatientsForDoctorViaFunction, listenPatientsForDoctor } from "../../services/chat";
 import { listenAppointmentsByDoctor } from "@/services/appointments";
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet";
 
 interface Patient {
     id: string;
@@ -131,8 +138,70 @@ export default function DoctorPatients() {
     const inactivePatients = filteredPatients.filter((p) => p.status === "inactive");
 
     return (
-        <div className="min-h-screen bg-background flex">
-            {/* Sidebar */}
+        <div className="min-h-screen bg-background flex flex-col lg:flex-row">
+            {/* MOBILE HEADER */}
+            <header className="border-b border-border bg-card sticky top-0 z-40 lg:hidden">
+                <div className="flex items-center gap-4 h-16 px-4">
+                    <Sheet>
+                        <SheetTrigger asChild>
+                            <Button size="icon" variant="ghost">
+                                <Menu className="w-5 h-5" />
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="left">
+                            <SheetHeader>
+                                <SheetTitle>
+                                    <Logo />
+                                </SheetTitle>
+                            </SheetHeader>
+                            <nav className="space-y-2 mt-6">
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
+                                    <LayoutDashboard className="w-4 h-4" />
+                                    Dashboard
+                                </Button>
+                                <Button variant="secondary" className="w-full justify-start gap-3">
+                                    <Users className="w-4 h-4" />
+                                    Patients
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
+                                    <CalendarIcon className="w-4 h-4" />
+                                    Appointments
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+                                    <MessageSquare className="w-4 h-4" />
+                                    Messages
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
+                                    <FileText className="w-4 h-4" />
+                                    Reports
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/analytics")}>
+                                    <BarChart3 className="w-4 h-4" />
+                                    Analytics
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
+                                    <Settings className="w-4 h-4" />
+                                    Settings
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    className="w-full justify-start gap-3 mt-4"
+                                    onClick={() => {
+                                        auth.signOut();
+                                        navigate("/auth");
+                                    }}
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                    Logout
+                                </Button>
+                            </nav>
+                        </SheetContent>
+                    </Sheet>
+                    <h1 className="font-semibold">Patients</h1>
+                </div>
+            </header>
+
+            {/* DESKTOP SIDEBAR */}
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block">
                 <Logo className="mb-8" />
                 <nav className="space-y-2">
@@ -201,17 +270,17 @@ export default function DoctorPatients() {
                             navigate("/auth");
                         }}
                     >
-                        <span className="text-sm">🚪</span>
+                        <LogOut className="w-4 h-4" />
                         <span className="sidebar-label">Logout</span>
                     </Button>
                 </div>
             </aside>
 
-            {/* Main Content */}
+            {/* MAIN CONTENT */}
             <main className="flex-1 overflow-auto">
                 <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
                     {/* Header */}
-                    <div className="flex items-center justify-between gap-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                         <div>
                             <h1 className="text-2xl sm:text-3xl font-bold">Patients</h1>
                             <p className="text-sm text-muted-foreground mt-1">

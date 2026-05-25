@@ -1,9 +1,21 @@
 import { useState, useRef, useEffect } from "react";
+import { httpsCallable } from "firebase/functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Send, Sparkles, Lightbulb, Clock, Pill, User, Bot } from "lucide-react";
-import { auth } from "@/firebase";
+import { languageTools } from "@/lib/languagetools";
+import {
+    Send,
+    Sparkles,
+    Lightbulb,
+    Clock,
+    Pill,
+    User,
+    Bot,
+    ShieldAlert,
+} from "lucide-react";
+import { auth, functions } from "@/firebase";
+import { toast } from "sonner";
 
 interface Message {
     id: string;
@@ -12,32 +24,52 @@ interface Message {
     timestamp: Date;
 }
 
+type GeminiResponse = {
+    reply: string;
+};
+
 const SUGGESTED_PROMPTS = [
-    { icon: Clock, text: "What are my appointments today?", color: "text-blue-500" },
-    { icon: Pill, text: "Remind me about my medications", color: "text-purple-500" },
-    { icon: Lightbulb, text: "Tips for managing daily tasks", color: "text-amber-500" },
+    {
+        icon: Clock,
+        text: "What should I do before an appointment?",
+        color: "text-blue-500",
+    },
+    {
+        icon: Pill,
+        text: "How can I remember my medications?",
+        color: "text-purple-500",
+    },
+    {
+        icon: Lightbulb,
+        text: "Give me daily care tips",
+        color: "text-amber-500",
+    },
 ];
 
 const INITIAL_GREETING: Message = {
     id: "greeting",
     role: "assistant",
-    content: `Hello! I'm your AI health assistant, here to help you with your daily needs. I can help you with:
+    content: `Hello! I'm your EchoCare AI health assistant.
 
-• Medication reminders and schedules
-• Appointment information
-• Daily task assistance
-• Health-related questions
-• Emergency contacts
+I can help with:
+• Medication and reminder guidance
+• Appointment preparation
+• Daily care tips
+• SOS and safety guidance
+• How to use EchoCare features
 
-How can I assist you today?`,
+I can provide general guidance, but I cannot diagnose illness or replace a doctor.`,
     timestamp: new Date(),
 };
 
 export default function PatientChatbot() {
     const user = auth.currentUser;
+    const [language, setLanguage] = useState(languageTools.getLanguage());
+
     const [messages, setMessages] = useState<Message[]>([INITIAL_GREETING]);
     const [input, setInput] = useState("");
     const [isTyping, setIsTyping] = useState(false);
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -47,15 +79,39 @@ export default function PatientChatbot() {
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages]);
+    }, [messages, isTyping]);
+
+    const callGemini = async (text: string) => {
+        const callable = httpsCallable(functions, "askGeminiChat");
+
+        const history = messages
+            .filter((item) => item.id !== "greeting")
+            .slice(-8)
+            .map((item) => ({
+                role: item.role,
+                content: item.content,
+            }));
+
+        const result = await callable({
+            message: text,
+            history,
+        });
+
+        return result.data as GeminiResponse;
+    };
 
     const handleSendMessage = async (messageText?: string) => {
         const text = messageText || input.trim();
+
         if (!text) return;
 
-        // Add user message
+        if (!user) {
+            toast.error("Please sign in first.");
+            return;
+        }
+
         const userMessage: Message = {
-            id: Date.now().toString(),
+            id: `user-${Date.now()}`,
             role: "user",
             content: text,
             timestamp: new Date(),
@@ -65,38 +121,37 @@ export default function PatientChatbot() {
         setInput("");
         setIsTyping(true);
 
-        // Simulate AI response (replace with actual API call)
-        setTimeout(() => {
-            const aiResponse = generateAIResponse(text);
+        try {
+            const data = await callGemini(text);
+
             const assistantMessage: Message = {
-                id: (Date.now() + 1).toString(),
+                id: `assistant-${Date.now()}`,
                 role: "assistant",
-                content: aiResponse,
+                content: data.reply || "Sorry, I could not generate a response.",
                 timestamp: new Date(),
             };
+
             setMessages((prev) => [...prev, assistantMessage]);
+        } catch (error: any) {
+            console.error("Gemini chatbot failed:", error);
+
+            const errorMessage =
+                error?.message ||
+                "AI assistant is not available right now. Please try again.";
+
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: `assistant-error-${Date.now()}`,
+                    role: "assistant",
+                    content: errorMessage,
+                    timestamp: new Date(),
+                },
+            ]);
+
+            toast.error("AI chatbot failed.");
+        } finally {
             setIsTyping(false);
-        }, 1000 + Math.random() * 1000);
-    };
-
-    const generateAIResponse = (userInput: string): string => {
-        const input = userInput.toLowerCase();
-
-        // Simple response logic (replace with actual AI integration)
-        if (input.includes("medication") || input.includes("medicine") || input.includes("pill")) {
-            return "Your medications for today are:\n\n• Morning: Aricept 10mg - Take with breakfast\n• Afternoon: Namenda 10mg - Take with lunch\n• Evening: Vitamin B12 - Take with dinner\n\nRemember to take them with food and water. Would you like me to set up reminders?";
-        } else if (input.includes("appointment") || input.includes("doctor")) {
-            return "You have an upcoming appointment:\n\n📅 Dr. Evelyn Reed\n🕐 Tomorrow at 10:30 AM\n📍 City Hospital - Room 402\n\nWould you like me to add a reminder or provide directions?";
-        } else if (input.includes("emergency") || input.includes("help") || input.includes("urgent")) {
-            return "For emergencies, please:\n\n🚨 Call 911 for immediate help\n📞 Contact your caregiver: (555) 123-4567\n👨‍⚕️ Reach your doctor: Dr. Reed (555) 987-6543\n\nStay calm and safe. I'm here to help coordinate assistance.";
-        } else if (input.includes("task") || input.includes("todo") || input.includes("daily")) {
-            return "Here are your tasks for today:\n\n✓ Take morning medication (Completed)\n• Attend physical therapy at 2 PM\n• Call family member (Sarah)\n• Prepare dinner ingredients\n• Evening walk (weather permitting)\n\nWould you like me to explain any of these in more detail?";
-        } else if (input.includes("hello") || input.includes("hi") || input.includes("hey")) {
-            return `Hello ${user?.displayName || "there"}! I'm here to help you throughout the day. Feel free to ask me about your medications, appointments, or any health-related questions. How can I assist you?`;
-        } else if (input.includes("thank") || input.includes("thanks")) {
-            return "You're very welcome! I'm always here to help. Don't hesitate to ask if you need anything else. Have a wonderful day! 😊";
-        } else {
-            return "I understand you're asking about that. As your AI health assistant, I can help you with:\n\n• Medication schedules and reminders\n• Appointment information\n• Daily task management\n• Health tips and advice\n• Emergency contacts\n\nCould you please tell me more about what you'd like to know?";
         }
     };
 
@@ -105,27 +160,40 @@ export default function PatientChatbot() {
         inputRef.current?.focus();
     };
 
+    const handleLanguageToggle = () => {
+        const newLang = languageTools.toggleLanguage();
+        setLanguage(newLang);
+    };
+
     return (
         <div className="max-w-7xl mx-auto h-[calc(100vh-8rem)]">
             <div className="h-full flex flex-col">
-                {/* HEADER */}
                 <div className="mb-4">
                     <div className="flex items-center gap-3 mb-2">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center">
                             <Sparkles className="w-5 h-5 text-white" />
                         </div>
+
                         <div>
-                            <h1 className="text-2xl sm:text-3xl font-bold">AI Health Assistant</h1>
+                            <h1 className="text-2xl sm:text-3xl font-bold">
+                                AI Health Assistant
+                            </h1>
                             <p className="text-sm text-muted-foreground">
-                                Your personal health companion
+                                Gemini-powered support for EchoCare users
                             </p>
                         </div>
                     </div>
                 </div>
 
-                {/* MAIN CHAT AREA */}
                 <Card className="flex-1 flex flex-col overflow-hidden bg-card border border-border">
-                    {/* Messages Area */}
+                    <div className="border-b border-border p-3 bg-muted/30 flex items-start gap-2 text-xs sm:text-sm text-muted-foreground">
+                        <ShieldAlert className="w-4 h-4 mt-0.5 text-amber-500 flex-shrink-0" />
+                        <p>
+                            This AI gives general guidance only. It does not replace a doctor.
+                            For emergencies, contact your caregiver, doctor, or emergency services.
+                        </p>
+                    </div>
+
                     <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
                         {messages.length === 1 && (
                             <div className="mb-6">
@@ -167,6 +235,7 @@ export default function PatientChatbot() {
                                     <p className="text-sm sm:text-base whitespace-pre-line">
                                         {message.content}
                                     </p>
+
                                     <p
                                         className={`text-xs mt-2 ${message.role === "user"
                                             ? "text-primary-foreground/70"
@@ -193,11 +262,21 @@ export default function PatientChatbot() {
                                 <div className="w-8 h-8 rounded-full bg-gradient-to-r from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
                                     <Bot className="w-4 h-4 text-white" />
                                 </div>
+
                                 <div className="bg-secondary rounded-2xl px-4 py-3">
                                     <div className="flex gap-1">
-                                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></div>
-                                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></div>
-                                        <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></div>
+                                        <div
+                                            className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"
+                                            style={{ animationDelay: "0ms" }}
+                                        />
+                                        <div
+                                            className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"
+                                            style={{ animationDelay: "150ms" }}
+                                        />
+                                        <div
+                                            className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce"
+                                            style={{ animationDelay: "300ms" }}
+                                        />
                                     </div>
                                 </div>
                             </div>
@@ -206,7 +285,6 @@ export default function PatientChatbot() {
                         <div ref={messagesEndRef} />
                     </div>
 
-                    {/* Input Area */}
                     <div className="border-t border-border p-4 bg-background">
                         <form
                             onSubmit={(e) => {
@@ -219,10 +297,11 @@ export default function PatientChatbot() {
                                 ref={inputRef}
                                 value={input}
                                 onChange={(e) => setInput(e.target.value)}
-                                placeholder="Ask me anything about your health, medications, or appointments..."
+                                placeholder="Ask about reminders, appointments, care tips, or EchoCare..."
                                 className="flex-1 text-base"
                                 disabled={isTyping}
                             />
+
                             <Button
                                 type="submit"
                                 size="icon"
@@ -232,8 +311,9 @@ export default function PatientChatbot() {
                                 <Send className="w-4 h-4" />
                             </Button>
                         </form>
+
                         <p className="text-xs text-muted-foreground mt-2 text-center">
-                            AI Assistant can make mistakes. Please verify important information.
+                            AI can make mistakes. Verify important health information with a professional.
                         </p>
                     </div>
                 </Card>

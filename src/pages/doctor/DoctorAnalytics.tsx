@@ -5,7 +5,14 @@ import { auth, db } from "@/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
-import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, FileText, Activity, Clock, Eye, TrendingUp } from "lucide-react";
+import { LayoutDashboard, Users, CalendarIcon, MessageSquare, BarChart3, Settings, FileText, Activity, Clock, Eye, TrendingUp, Menu, LogOut } from "lucide-react";
+import {
+    Sheet,
+    SheetContent,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from "@/components/ui/sheet";
 
 type ReportMessage = {
     id: string;
@@ -216,7 +223,70 @@ export default function DoctorAnalytics() {
     );
 
     return (
-        <div className="min-h-screen bg-background flex">
+        <div className="min-h-screen bg-background flex flex-col lg:flex-row">
+            {/* MOBILE HEADER */}
+            <header className="border-b border-border bg-card sticky top-0 z-40 lg:hidden">
+                <div className="flex items-center gap-4 h-16 px-4">
+                    <Sheet>
+                        <SheetTrigger asChild>
+                            <Button size="icon" variant="ghost">
+                                <Menu className="w-5 h-5" />
+                            </Button>
+                        </SheetTrigger>
+                        <SheetContent side="left">
+                            <SheetHeader>
+                                <SheetTitle>
+                                    <Logo />
+                                </SheetTitle>
+                            </SheetHeader>
+                            <nav className="space-y-2 mt-6">
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor")}>
+                                    <LayoutDashboard className="w-4 h-4" />
+                                    Dashboard
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/patients")}>
+                                    <Users className="w-4 h-4" />
+                                    Patients
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/appointments")}>
+                                    <CalendarIcon className="w-4 h-4" />
+                                    Appointments
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/messages")}>
+                                    <MessageSquare className="w-4 h-4" />
+                                    Messages
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/reports")}>
+                                    <FileText className="w-4 h-4" />
+                                    Reports
+                                </Button>
+                                <Button variant="secondary" className="w-full justify-start gap-3">
+                                    <BarChart3 className="w-4 h-4" />
+                                    Analytics
+                                </Button>
+                                <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => navigate("/doctor/settings")}>
+                                    <Settings className="w-4 h-4" />
+                                    Settings
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    className="w-full justify-start gap-3 mt-4"
+                                    onClick={() => {
+                                        auth.signOut();
+                                        navigate("/auth");
+                                    }}
+                                >
+                                    <LogOut className="w-4 h-4" />
+                                    Logout
+                                </Button>
+                            </nav>
+                        </SheetContent>
+                    </Sheet>
+                    <h1 className="font-semibold">Analytics</h1>
+                </div>
+            </header>
+
+            {/* DESKTOP SIDEBAR */}
             <aside className="w-64 bg-card border-r border-border p-6 hidden lg:block overflow-y-auto">
                 <Logo className="mb-8" />
                 <nav className="space-y-2">
@@ -258,7 +328,7 @@ export default function DoctorAnalytics() {
                             navigate("/auth");
                         }}
                     >
-                        <span className="text-sm">🚪</span>
+                        <LogOut className="w-4 h-4" />
                         Logout
                     </Button>
                 </div>

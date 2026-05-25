@@ -1,4 +1,12 @@
-import { addDoc, collection, onSnapshot, orderBy, query, serverTimestamp, where } from "firebase/firestore";
+import {
+    addDoc,
+    collection,
+    onSnapshot,
+    orderBy,
+    query,
+    serverTimestamp,
+    where,
+} from "firebase/firestore";
 import { db } from "@/firebase";
 
 export type SosAlert = {
@@ -41,11 +49,59 @@ export async function createSosAlert(params: {
         adminVisibility: true,
     };
 
-    const ref = await addDoc(collection(db, "sosAlerts"), payload);
-    return ref.id;
+    const sosRef = await addDoc(collection(db, "sosAlerts"), payload);
+
+    const mapUrl = `https://maps.google.com/?q=${params.lat},${params.lng}`;
+    const locationText = params.address || `${params.lat}, ${params.lng}`;
+    const patientName = params.patientName || "Patient";
+
+    // Notification for assigned caregiver
+    if (params.caregiverId) {
+        await addDoc(collection(db, "notifications"), {
+            type: "sos",
+            title: `🚨 SOS Alert from ${patientName}`,
+            body: `${patientName} needs immediate help at ${locationText}`,
+            senderId: params.patientId,
+            senderName: patientName,
+            recipientId: params.caregiverId,
+            recipientRole: "caregiver",
+            sosAlertId: sosRef.id,
+            lat: params.lat,
+            lng: params.lng,
+            address: params.address || null,
+            mapUrl,
+            read: false,
+            createdAt: serverTimestamp(),
+        });
+    }
+
+    // Optional notification for assigned doctor
+    if (params.doctorId) {
+        await addDoc(collection(db, "notifications"), {
+            type: "sos",
+            title: `🚨 SOS Alert from ${patientName}`,
+            body: `${patientName} needs immediate help at ${locationText}`,
+            senderId: params.patientId,
+            senderName: patientName,
+            recipientId: params.doctorId,
+            recipientRole: "doctor",
+            sosAlertId: sosRef.id,
+            lat: params.lat,
+            lng: params.lng,
+            address: params.address || null,
+            mapUrl,
+            read: false,
+            createdAt: serverTimestamp(),
+        });
+    }
+
+    return sosRef.id;
 }
 
-export function listenSosAlertsForCaregiver(caregiverId: string, callback: (alerts: SosAlert[]) => void) {
+export function listenSosAlertsForCaregiver(
+    caregiverId: string,
+    callback: (alerts: SosAlert[]) => void
+) {
     const q = query(
         collection(db, "sosAlerts"),
         where("caregiverId", "==", caregiverId),
@@ -55,21 +111,34 @@ export function listenSosAlertsForCaregiver(caregiverId: string, callback: (aler
     return onSnapshot(
         q,
         (snap) => {
-            const alerts = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+            const alerts = snap.docs.map((d) => ({
+                id: d.id,
+                ...(d.data() as any),
+            }));
             callback(alerts as SosAlert[]);
         },
-        () => callback([])
+        (error) => {
+            console.error("listenSosAlertsForCaregiver error:", error);
+            callback([]);
+        }
     );
 }
 
 export function listenSosAlertsForAdmin(callback: (alerts: SosAlert[]) => void) {
     const q = query(collection(db, "sosAlerts"), orderBy("createdAt", "desc"));
+
     return onSnapshot(
         q,
         (snap) => {
-            const alerts = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+            const alerts = snap.docs.map((d) => ({
+                id: d.id,
+                ...(d.data() as any),
+            }));
             callback(alerts as SosAlert[]);
         },
-        () => callback([])
+        (error) => {
+            console.error("listenSosAlertsForAdmin error:", error);
+            callback([]);
+        }
     );
 }
